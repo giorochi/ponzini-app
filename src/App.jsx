@@ -10,7 +10,8 @@ import {
   setDoc,
   getDoc,
   deleteDoc,
-  arrayUnion
+  arrayUnion,
+  query
 } from 'firebase/firestore';
 import { 
   getAuth, 
@@ -28,7 +29,15 @@ import {
   History,
   Search,
   Bookmark,
-  ShieldCheck
+  ShieldCheck,
+  Users,
+  LayoutDashboard,
+  Calendar,
+  ChevronRight,
+  Info,
+  BookOpen,
+  ArrowRight,
+  CheckSquare
 } from 'lucide-react';
 
 // ==========================================
@@ -60,55 +69,60 @@ export default function App() {
   const [userData, setUserData] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [books, setBooks] = useState([]);
+  const [allUsers, setAllUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isRegistering, setIsRegistering] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(null);
   const [view, setView] = useState('catalog'); 
   const [searchTerm, setSearchTerm] = useState('');
-  const [authError, setAuthError] = useState(null);
 
   const [regForm, setRegForm] = useState({ classe: '' });
-  const [bookForm, setBookForm] = useState({ titolo: '', autore: '' });
+  const [bookForm, setBookForm] = useState({ titolo: '', autore: '', genere: 'Narrativa', descrizione: '' });
 
   const SCHOOL_LOGO = "https://iisslilla.edu.it/wp-content/uploads/sites/996/lilla.png?x79845";
 
+  // --- Gestione Autenticazione e Profilo ---
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
+    const unsubscribe = onAuthStateChanged(auth, async (u) => {
       if (u) {
         setUser(u);
         const isUserAdmin = u.email === ADMIN_EMAIL;
         setIsAdmin(isUserAdmin);
         
-        const checkProfile = async (currentUser, adminFlag) => {
-          try {
-            if (adminFlag) {
-              setUserData({
-                nome: "Amministrazione",
+        try {
+          const userRef = doc(db, 'artifacts', APP_ID, 'users', u.uid, 'profile', 'data');
+          const userSnap = await getDoc(userRef);
+          
+          if (userSnap.exists()) {
+            setUserData(userSnap.data());
+            setIsRegistering(false);
+          } else {
+            // Se è l'admin e non ha profilo, lo creiamo auto-generato
+            if (isUserAdmin) {
+              const adminData = {
+                nome: "Preside",
                 cognome: "Lilla",
-                classe: "Staff Scuola",
-                photoURL: SCHOOL_LOGO,
-                isAdmin: true
-              });
+                classe: "Dirigenza",
+                photoURL: u.photoURL || SCHOOL_LOGO,
+                isAdmin: true,
+                email: u.email,
+                registeredAt: new Date().toISOString()
+              };
+              await setDoc(userRef, adminData);
+              // Lo salviamo anche nella directory pubblica per la vista admin
+              await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'user_directory', u.uid), adminData);
+              setUserData(adminData);
               setIsRegistering(false);
             } else {
-              const userRef = doc(db, 'artifacts', APP_ID, 'users', currentUser.uid, 'profile', 'data');
-              const userSnap = await getDoc(userRef);
-              if (userSnap.exists()) {
-                setUserData(userSnap.data());
-                setIsRegistering(false);
-              } else {
-                setIsRegistering(true);
-              }
+              setIsRegistering(true);
             }
-          } catch (error) { 
-            console.error("Errore recupero profilo:", error); 
-          } finally { 
-            setLoading(false); 
           }
-        };
-
-        checkProfile(u, isUserAdmin);
+        } catch (error) {
+          console.error("Errore recupero profilo:", error);
+        } finally {
+          setLoading(false);
+        }
       } else {
         setUser(null);
         setUserData(null);
@@ -119,304 +133,375 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  const handleGoogleSignIn = async () => {
-    setAuthError(null);
-    try { 
-      await signInWithPopup(auth, googleProvider); 
-    } catch (error) { 
-      setAuthError("Impossibile accedere. Verifica la configurazione di Firebase Auth.");
-      console.error("Login error:", error);
-    }
-  };
+  // --- Sincronizzazione Libri ---
+  useEffect(() => {
+    if (!user || isRegistering) return;
+    const booksRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'books');
+    return onSnapshot(booksRef, (snapshot) => {
+      setBooks(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, [user, isRegistering]);
 
+  // --- Sincronizzazione Utenti (Solo Admin) ---
+  useEffect(() => {
+    if (!isAdmin || view !== 'users') return;
+    const usersRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'user_directory');
+    return onSnapshot(usersRef, (snapshot) => {
+      setAllUsers(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, [isAdmin, view]);
+
+  const handleGoogleSignIn = () => signInWithPopup(auth, googleProvider);
   const handleSignOut = () => signOut(auth);
 
   const handleCompleteRegistration = async (e) => {
     e.preventDefault();
-    if (!user) return;
-    const profileData = { 
+    const profile = { 
       nome: user.displayName?.split(' ')[0] || 'Studente',
       cognome: user.displayName?.split(' ').slice(1).join(' ') || 'Lilla',
       email: user.email,
-      photoURL: user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.uid}`,
+      photoURL: user.photoURL,
       classe: regForm.classe,
-      uid: user.uid, 
-      registeredAt: new Date().toISOString() 
+      uid: user.uid,
+      registeredAt: new Date().toISOString()
     };
-    try {
-      await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'profile', 'data'), profileData);
-      setUserData(profileData);
-      setIsRegistering(false);
-    } catch (error) { 
-      console.error("Errore registrazione:", error); 
-    }
+    await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'profile', 'data'), profile);
+    await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'user_directory', user.uid), profile);
+    setUserData(profile);
+    setIsRegistering(false);
   };
 
-  useEffect(() => {
-    if (!user || isRegistering) return;
-    const booksRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'books');
-    const unsubscribe = onSnapshot(booksRef, (snapshot) => {
-      const booksList = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
-      setBooks(booksList.sort((a, b) => new Date(b.dataLascito) - new Date(a.dataLascito)));
-    }, (err) => {
-      console.error("Errore database:", err);
-    });
-    return () => unsubscribe();
-  }, [user, isRegistering]);
-
-  const addBook = async (e) => {
+  const handleAddBook = async (e) => {
     e.preventDefault();
-    if (!userData) return;
     const newBook = {
-      titolo: bookForm.titolo,
-      autore: bookForm.autore,
-      donatoreId: isAdmin ? 'admin' : user.uid,
-      donatoreNome: isAdmin ? "Scuola Lilla" : `${userData.nome} ${userData.cognome}`,
-      donatoreClasse: isAdmin ? "Biblioteca" : userData.classe,
+      ...bookForm,
+      donatoreId: user.uid,
+      donatoreNome: `${userData.nome} ${userData.cognome}`,
+      donatoreClasse: userData.classe,
       dataLascito: new Date().toISOString(),
       status: 'disponibile',
       cronologia: [{
         tipo: 'donazione',
-        utente: isAdmin ? "Scuola Lilla" : `${userData.nome} ${userData.cognome} (${userData.classe})`,
+        utente: `${userData.nome} ${userData.cognome} (${userData.classe})`,
         data: new Date().toISOString()
       }]
     };
-    try {
-      await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'books'), newBook);
-      setBookForm({ titolo: '', autore: '' });
-      setShowAddModal(false);
-    } catch (error) { 
-      console.error("Errore salvataggio libro:", error); 
-    }
+    await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'books'), newBook);
+    setBookForm({ titolo: '', autore: '', genere: 'Narrativa', descrizione: '' });
+    setShowAddModal(false);
   };
 
-  const withdrawBook = async (bookId) => {
-    if (!userData) return;
+  const handleLoanAction = async (bookId, action) => {
     const bookRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'books', bookId);
-    try {
-      await updateDoc(bookRef, {
-        status: 'ritirato',
-        presoDaId: user.uid,
-        presoDaNome: `${userData.nome} ${userData.cognome}`,
-        dataRitiro: new Date().toISOString(),
-        cronologia: arrayUnion({
-          tipo: 'prestito',
-          utente: `${userData.nome} ${userData.cognome} (${userData.classe})`,
-          data: new Date().toISOString()
-        })
-      });
-    } catch (error) { 
-      console.error("Errore prestito:", error); 
-    }
-  };
-
-  const returnBook = async (bookId) => {
-    if (!userData) return;
-    const bookRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'books', bookId);
-    try {
-      await updateDoc(bookRef, {
-        status: 'disponibile',
-        presoDaId: null,
-        presoDaNome: null,
-        cronologia: arrayUnion({
-          tipo: 'restituzione',
-          utente: `${userData.nome} ${userData.cognome} (${userData.classe})`,
-          data: new Date().toISOString()
-        })
-      });
-    } catch (error) { 
-      console.error("Errore restituzione:", error); 
-    }
+    const log = {
+      tipo: action === 'ritiro' ? 'prestito' : 'restituzione',
+      utente: `${userData.nome} ${userData.cognome} (${userData.classe})`,
+      data: new Date().toISOString()
+    };
+    
+    await updateDoc(bookRef, {
+      status: action === 'ritiro' ? 'ritirato' : 'disponibile',
+      presoDaId: action === 'ritiro' ? user.uid : null,
+      presoDaNome: action === 'ritiro' ? `${userData.nome} ${userData.cognome}` : null,
+      cronologia: arrayUnion(log)
+    });
   };
 
   const filteredBooks = books.filter(b => 
-    b.titolo?.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    b.autore?.toLowerCase().includes(searchTerm.toLowerCase())
+    b.titolo.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    b.autore.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const availableBooks = filteredBooks.filter(b => b.status === 'disponibile');
-  const myBooks = filteredBooks.filter(b => b.status === 'ritirato' && b.presoDaId === user.uid);
-  const allRetired = filteredBooks.filter(b => b.status === 'ritirato');
-
   if (loading) return (
-    <div className="flex items-center justify-center min-h-screen bg-white">
+    <div className="h-screen flex items-center justify-center bg-[#1e293b] text-[#cbb26a]">
       <div className="text-center">
-        <img src={SCHOOL_LOGO} alt="Lilla" className="h-20 mx-auto animate-pulse mb-4" />
-        <p className="text-slate-400 text-[10px] tracking-widest uppercase font-bold">Caricamento in corso...</p>
+        <img src={SCHOOL_LOGO} className="h-20 mx-auto mb-4 animate-bounce" alt="Lilla" />
+        <p className="font-black uppercase tracking-[0.3em] text-sm italic">Caricamento Sistema...</p>
       </div>
     </div>
   );
 
   if (!user) return (
-    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
-      <div className="bg-white p-12 rounded-[2.5rem] shadow-xl w-full max-w-md border border-slate-100">
-        <img src={SCHOOL_LOGO} alt="Lilla" className="h-32 mx-auto mb-8" />
-        <h1 className="text-3xl font-bold text-[#1a365d] mb-2">Progetto Ponzini</h1>
-        <p className="text-slate-400 text-[10px] uppercase tracking-[0.3em] font-bold mb-10 italic">I.I.S. "Vincenzo Lilla"</p>
-        
-        {authError && <div className="mb-6 p-4 bg-red-50 text-red-600 text-xs rounded-xl">{authError}</div>}
-
-        <button onClick={handleGoogleSignIn} className="w-full flex items-center justify-center gap-4 bg-[#1a365d] text-white py-5 rounded-2xl font-bold hover:shadow-lg transition-all">
-          <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5 bg-white p-0.5 rounded-full" alt="Google" />
-          Accedi con Google
-        </button>
+    <div className="min-h-screen bg-[#f1f5f9] flex items-center justify-center p-4">
+      <div className="bg-white w-full max-w-4xl border-[6px] border-slate-900 shadow-[20px_20px_0px_#1e293b] flex flex-col md:flex-row overflow-hidden">
+        <div className="bg-[#1e293b] p-12 text-white md:w-1/2 flex flex-col justify-center items-center text-center">
+          <img src={SCHOOL_LOGO} className="w-32 mb-8" alt="Lilla" />
+          <h2 className="text-3xl font-black uppercase italic tracking-tighter mb-2">I.I.S. Lilla</h2>
+          <p className="text-[#cbb26a] font-bold uppercase tracking-widest text-xs">Biblioteca Ponzini</p>
+        </div>
+        <div className="p-12 md:w-1/2 flex flex-col justify-center">
+          <h1 className="text-4xl font-black text-slate-900 mb-6 uppercase leading-none italic">Bentornato,<br />Studente.</h1>
+          <p className="text-slate-500 font-bold text-sm mb-10 uppercase">Accedi con la tua email scolastica per consultare il catalogo digitale.</p>
+          <button onClick={handleGoogleSignIn} className="bg-[#1e293b] text-white py-5 px-8 font-black uppercase text-sm tracking-widest hover:bg-[#cbb26a] hover:text-[#1e293b] transition-all flex items-center justify-center gap-4 border-b-4 border-slate-950">
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-6 bg-white p-1" alt="" />
+            Accedi con Google
+          </button>
+        </div>
       </div>
-      <p className="mt-8 text-[10px] text-slate-400 font-bold uppercase tracking-widest">Creato da Giovanni Rochira</p>
     </div>
   );
 
   if (isRegistering) return (
-    <div className="min-h-screen bg-white flex items-center justify-center p-4">
-      <div className="w-full max-w-sm text-center">
-        <h2 className="text-2xl font-bold text-[#1a365d] mb-8">Completa la registrazione</h2>
-        <form onSubmit={handleCompleteRegistration} className="space-y-6">
-          <input required placeholder="Inserisci la tua Classe (es. 4A)" className="w-full px-6 py-5 bg-slate-50 rounded-2xl outline-none focus:ring-2 focus:ring-[#cbb26a] font-semibold" value={regForm.classe} onChange={(e) => setRegForm({classe: e.target.value})} />
-          <button type="submit" className="w-full bg-[#1a365d] text-white py-5 rounded-2xl font-bold shadow-lg">Inizia subito</button>
+    <div className="min-h-screen bg-slate-200 flex items-center justify-center p-6">
+      <div className="bg-white border-[6px] border-slate-900 p-12 max-w-md w-full shadow-[15px_15px_0px_#cbb26a]">
+        <h2 className="text-3xl font-black uppercase italic mb-8 text-slate-900 border-b-4 border-slate-100 pb-2">Registrazione</h2>
+        <form onSubmit={handleCompleteRegistration} className="space-y-8">
+          <div>
+            <label className="text-[10px] font-black uppercase text-slate-400 mb-2 block">La tua Classe (es. 4A Scientifico)</label>
+            <input required placeholder="SCRIVI QUI..." className="w-full p-4 bg-slate-50 border-4 border-slate-100 outline-none focus:border-slate-900 font-bold uppercase" value={regForm.classe} onChange={e => setRegForm({classe: e.target.value})} />
+          </div>
+          <button className="w-full bg-slate-900 text-white py-5 font-black uppercase tracking-[0.2em] hover:bg-[#cbb26a] hover:text-black transition-all">Configura Ora</button>
         </form>
       </div>
     </div>
   );
 
   return (
-    <div className="min-h-screen bg-[#fcfdfe] text-slate-800 pb-32">
-      <header className="bg-white border-b border-slate-100 sticky top-0 z-40 px-6 py-4">
-        <div className="max-w-6xl mx-auto flex justify-between items-center">
-          <div className="flex items-center gap-4">
-            <img src={SCHOOL_LOGO} alt="Lilla" className="h-12" />
+    <div className="min-h-screen bg-[#f8fafc] text-slate-900 font-sans flex flex-col">
+      {/* HEADER NAVBAR */}
+      <nav className="bg-white border-b-[6px] border-slate-900 sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-6 h-24 flex items-center justify-between">
+          <div className="flex items-center gap-6">
+            <div className="bg-slate-900 p-2 border-2 border-[#cbb26a]">
+              <img src={SCHOOL_LOGO} className="h-10" alt="Logo" />
+            </div>
             <div className="hidden sm:block">
-              <h1 className="text-lg font-bold text-[#1a365d] leading-none text-left">Liceo Lilla</h1>
-              <p className="text-[9px] text-slate-400 uppercase font-bold tracking-tighter text-left">Biblioteca Ponzini</p>
+              <h1 className="text-xl font-black uppercase tracking-tighter leading-none italic">Ponzini Digital Hub</h1>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Biblioteca I.I.S. Vincenzo Lilla</p>
             </div>
           </div>
-          <div className="flex items-center gap-4">
-            <div className="hidden md:flex items-center bg-slate-50 rounded-xl px-4 py-2 border border-slate-100">
-              <Search size={16} className="text-slate-300" />
-              <input placeholder="Cerca libro o autore..." className="bg-transparent border-none outline-none ml-2 text-sm w-48" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+
+          <div className="flex items-center gap-6">
+            <div className="hidden lg:flex items-center bg-slate-100 border-2 border-slate-200 px-4 h-12 w-64">
+              <Search size={18} className="text-slate-400" />
+              <input placeholder="CERCA VOLUME..." className="bg-transparent border-none outline-none ml-3 text-[11px] font-black w-full uppercase" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
             </div>
-            <img src={userData?.photoURL} className="w-10 h-10 rounded-xl border-2 border-white shadow-md" alt="Avatar" />
-            <button onClick={handleSignOut} className="p-2 text-slate-300 hover:text-red-500 transition-colors flex items-center justify-center">
-              <LogOut size={20} />
+            <div className="flex items-center gap-4 pl-6 border-l-4 border-slate-100">
+              <div className="text-right hidden md:block">
+                <p className="text-[11px] font-black uppercase leading-none">{userData?.nome} {userData?.cognome}</p>
+                <p className="text-[9px] font-bold text-[#cbb26a] uppercase mt-1 bg-slate-900 px-2 inline-block italic">{userData?.classe}</p>
+              </div>
+              <img src={userData?.photoURL} className="w-12 h-12 border-4 border-slate-900 object-cover shadow-[4px_4px_0px_#cbb26a]" alt="User" />
+              <button onClick={handleSignOut} className="p-2 hover:bg-red-500 hover:text-white border-2 border-transparent hover:border-slate-900 transition-all"><LogOut size={20}/></button>
+            </div>
+          </div>
+        </div>
+      </nav>
+
+      <div className="flex flex-1 max-w-7xl mx-auto w-full">
+        {/* SIDEBAR SQUADRATA */}
+        <aside className="w-72 border-r-[6px] border-slate-900 hidden md:block bg-white p-8">
+          <div className="space-y-3">
+            <p className="text-[11px] font-black text-slate-400 uppercase mb-6 tracking-widest">Esplorazione</p>
+            <button onClick={() => setView('catalog')} className={`w-full flex items-center gap-4 px-6 py-5 font-black uppercase text-xs transition-all border-4 ${view === 'catalog' ? 'bg-slate-900 text-white border-slate-900 shadow-[6px_6px_0px_#cbb26a]' : 'border-transparent hover:bg-slate-50 text-slate-500'}`}>
+              <LayoutDashboard size={18} /> Catalogo
+            </button>
+            <button onClick={() => setView('history')} className={`w-full flex items-center gap-4 px-6 py-5 font-black uppercase text-xs transition-all border-4 ${view === 'history' ? 'bg-slate-900 text-white border-slate-900 shadow-[6px_6px_0px_#cbb26a]' : 'border-transparent hover:bg-slate-50 text-slate-500'}`}>
+              <Bookmark size={18} /> Miei Prestiti
+            </button>
+
+            {isAdmin && (
+              <>
+                <p className="text-[11px] font-black text-[#cbb26a] uppercase mt-12 mb-6 tracking-widest bg-slate-900 px-2 py-1 inline-block">Area Preside</p>
+                <button onClick={() => setView('admin')} className={`w-full flex items-center gap-4 px-6 py-5 font-black uppercase text-xs transition-all border-4 ${view === 'admin' ? 'bg-[#cbb26a] text-slate-900 border-slate-900 shadow-[6px_6px_0px_#1e293b]' : 'border-transparent hover:bg-slate-50 text-slate-500'}`}>
+                  <ShieldCheck size={18} /> Gestione Totale
+                </button>
+                <button onClick={() => setView('users')} className={`w-full flex items-center gap-4 px-6 py-5 font-black uppercase text-xs transition-all border-4 ${view === 'users' ? 'bg-[#cbb26a] text-slate-900 border-slate-900 shadow-[6px_6px_0px_#1e293b]' : 'border-transparent hover:bg-slate-50 text-slate-500'}`}>
+                  <Users size={18} /> Registro Studenti
+                </button>
+              </>
+            )}
+          </div>
+        </aside>
+
+        {/* MAIN CONTENT AREA */}
+        <main className="flex-1 p-10 bg-[#fdfdfd]">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end mb-12 border-b-[6px] border-slate-900 pb-8 gap-6">
+            <div>
+              <h2 className="text-5xl font-black uppercase italic text-slate-900 tracking-tighter leading-none">
+                {view === 'catalog' ? 'Catalogo Libri' : view === 'history' ? 'Prestiti Attivi' : view === 'users' ? 'Database Utenti' : 'Pannello Admin'}
+              </h2>
+              <p className="text-slate-400 font-bold text-xs uppercase mt-3 tracking-widest">Digital Archive — Licenza I.I.S. Lilla</p>
+            </div>
+            <button onClick={() => setShowAddModal(true)} className="bg-slate-900 text-white px-10 py-5 font-black uppercase text-xs tracking-widest flex items-center gap-4 hover:bg-[#cbb26a] hover:text-black transition-all shadow-[10px_10px_0px_#cbd5e1] border-2 border-slate-900">
+              <Plus size={22} /> Aggiungi Libro
             </button>
           </div>
-        </div>
-      </header>
 
-      <main className="max-w-6xl mx-auto p-6 mt-8">
-        <div className="flex flex-col sm:flex-row justify-between items-center mb-10 gap-6 text-center sm:text-left">
-          <h2 className="text-3xl font-bold text-[#1a365d] flex items-center gap-3">
-            {view === 'catalog' ? 'Libri Disponibili' : view === 'history' ? 'I miei Prestiti' : 'Libri in Prestito'}
-            {isAdmin && <ShieldCheck className="text-[#cbb26a]" />}
-          </h2>
-          <div className="flex bg-slate-100 p-1 rounded-2xl">
-            <button onClick={() => setView('catalog')} className={`px-5 py-2 rounded-xl text-[10px] font-bold uppercase transition-all ${view === 'catalog' ? 'bg-white shadow-sm text-[#1a365d]' : 'text-slate-400'}`}>Catalogo</button>
-            <button onClick={() => setView('history')} className={`px-5 py-2 rounded-xl text-[10px] font-bold uppercase transition-all ${view === 'history' ? 'bg-white shadow-sm text-[#1a365d]' : 'text-slate-400'}`}>Miei Prestiti</button>
-            {isAdmin && <button onClick={() => setView('admin')} className={`px-5 py-2 rounded-xl text-[10px] font-bold uppercase transition-all ${view === 'admin' ? 'bg-[#1a365d] text-white shadow-sm' : 'text-slate-400'}`}>Admin</button>}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {(view === 'catalog' ? availableBooks : view === 'history' ? myBooks : allRetired).map(book => (
-            <div key={book.id} className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 hover:shadow-md transition-all group">
-              <div className="flex justify-between items-start mb-6">
-                <div className="w-10 h-1 bg-[#cbb26a] rounded-full"></div>
-                <Book className="text-slate-100 group-hover:text-[#cbb26a]/20 transition-colors" size={32} />
-              </div>
-              <h3 className="text-xl font-bold text-[#1a365d] mb-1 text-left">{book.titolo}</h3>
-              <p className="text-slate-400 text-xs font-bold uppercase mb-6 text-left">{book.autore}</p>
-              
-              <div className="space-y-4 pt-6 border-t border-slate-50 text-left">
-                <div className="flex items-center gap-2 text-[10px] font-bold text-slate-500">
-                  <User size={12} /> Donato da: <span className="text-[#1a365d]">{book.donatoreNome}</span>
-                </div>
-                {book.status === 'ritirato' && (
-                  <div className="flex items-center gap-2 text-[10px] font-bold text-blue-500">
-                    <Bookmark size={12} /> In lettura a: <span className="font-black">{book.presoDaNome}</span>
+          {view === 'users' ? (
+            <div className="grid grid-cols-1 gap-6">
+              {allUsers.map(u => (
+                <div key={u.id} className="bg-white border-4 border-slate-900 p-8 flex flex-col md:flex-row items-center justify-between hover:shadow-[12px_12px_0px_#cbb26a] transition-all">
+                  <div className="flex items-center gap-8 mb-4 md:mb-0">
+                    <img src={u.photoURL} className="w-20 h-20 border-4 border-slate-900 shadow-[4px_4px_0px_#f1f5f9]" alt="" />
+                    <div>
+                      <h4 className="font-black uppercase text-2xl text-slate-900 italic leading-none">{u.nome} {u.cognome}</h4>
+                      <p className="text-slate-400 text-xs font-bold uppercase mt-2">{u.email}</p>
+                      <span className="bg-slate-900 text-white px-3 py-1 text-[10px] font-black uppercase mt-3 inline-block italic tracking-widest">{u.classe}</span>
+                    </div>
                   </div>
-                )}
-                <button onClick={() => setShowHistoryModal(book)} className="text-[9px] uppercase tracking-widest font-black text-slate-300 hover:text-[#cbb26a] flex items-center gap-1 transition-colors">
-                  <History size={12} /> Vedi Storia del libro
-                </button>
-              </div>
-
-              <div className="mt-8 flex gap-2">
-                {book.status === 'disponibile' ? (
-                  <>
-                    <button onClick={() => withdrawBook(book.id)} className="flex-1 bg-[#1a365d] text-white py-3 rounded-xl font-bold text-xs uppercase hover:bg-[#122641] transition-all">Prendi</button>
-                    {(isAdmin || book.donatoreId === user.uid) && (
-                      <button onClick={() => deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'books', book.id))} className="p-3 text-slate-200 hover:text-red-500 transition-colors flex items-center justify-center">
-                        <Trash2 size={18} />
-                      </button>
-                    )}
-                  </>
-                ) : (
-                  (isAdmin || book.presoDaId === user.uid) && (
-                    <button onClick={() => returnBook(book.id)} className="w-full bg-green-600 text-white py-3 rounded-xl font-bold text-xs uppercase hover:bg-green-700 transition-all">Restituisci</button>
-                  )
-                )}
-              </div>
+                  <div className="text-right flex flex-col items-end border-l-4 border-slate-50 pl-8">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Calendar size={14} className="text-[#cbb26a]" />
+                      <p className="text-[11px] font-black text-slate-400 uppercase italic">Iscritto il</p>
+                    </div>
+                    <p className="font-black text-lg text-slate-900">{new Date(u.registeredAt).toLocaleDateString()}</p>
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          ) : (
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-10">
+              {(view === 'catalog' ? filteredBooks.filter(b => b.status === 'disponibile') : 
+                view === 'history' ? books.filter(b => b.presoDaId === user.uid) : 
+                books).map(book => (
+                <div key={book.id} className="bg-white border-[6px] border-slate-900 flex flex-col md:flex-row hover:shadow-[15px_15px_0px_#1e293b] transition-all group overflow-hidden">
+                  <div className={`w-full md:w-16 ${book.status === 'disponibile' ? 'bg-[#cbb26a]' : 'bg-red-500'} flex items-center justify-center p-4 border-b-4 md:border-b-0 md:border-r-4 border-slate-900`}>
+                    <p className="font-black text-slate-900 uppercase text-xs -rotate-0 md:-rotate-90 whitespace-nowrap tracking-widest italic">
+                      {book.status === 'disponibile' ? 'Disponibile' : 'In Prestito'}
+                    </p>
+                  </div>
+                  <div className="p-10 flex-1">
+                    <div className="flex justify-between items-start mb-6">
+                      <span className="bg-slate-100 text-slate-500 px-4 py-2 text-[10px] font-black uppercase border-2 border-slate-200">{book.genere}</span>
+                      <BookOpen size={24} className="text-slate-200 group-hover:text-[#cbb26a] transition-all" />
+                    </div>
+                    <h3 className="text-3xl font-black uppercase leading-tight mb-2 italic tracking-tighter">{book.titolo}</h3>
+                    <p className="text-slate-400 font-bold uppercase text-xs mb-8 tracking-[0.2em]">{book.autore}</p>
+                    
+                    <div className="bg-slate-50 border-2 border-slate-100 p-6 space-y-4 mb-8">
+                      <div className="flex items-center gap-4 text-[11px] font-black uppercase text-slate-500">
+                        <User size={16} className="text-[#cbb26a]" /> 
+                        <span>Donatore: <span className="text-slate-900 ml-1">{book.donatoreNome}</span></span>
+                      </div>
+                      {book.status === 'ritirato' && (
+                        <div className="flex items-center gap-4 text-[11px] font-black uppercase text-red-600">
+                          <CheckSquare size={16} /> 
+                          <span>Posseduto da: <span className="ml-1">{book.presoDaNome}</span></span>
+                        </div>
+                      )}
+                    </div>
 
-        {filteredBooks.length === 0 && (
-          <div className="text-center py-20">
-            <Book className="mx-auto text-slate-100 mb-4" size={48} />
-            <p className="text-slate-400 font-bold uppercase text-[10px] tracking-widest">Nessun libro trovato</p>
+                    <div className="flex gap-4">
+                      {book.status === 'disponibile' ? (
+                        <button onClick={() => handleLoanAction(book.id, 'ritirato')} className="flex-1 bg-slate-900 text-white py-5 font-black uppercase text-xs tracking-[0.2em] hover:bg-[#cbb26a] hover:text-black transition-all border-b-4 border-slate-950 flex items-center justify-center gap-3">
+                          Prendi <ArrowRight size={18} />
+                        </button>
+                      ) : (
+                        (isAdmin || book.presoDaId === user.uid) && (
+                          <button onClick={() => handleLoanAction(book.id, 'reso')} className="flex-1 bg-green-500 text-white py-5 font-black uppercase text-xs tracking-[0.2em] border-b-4 border-green-700">Restituisci Libro</button>
+                        )
+                      )}
+                      <button onClick={() => setShowHistoryModal(book)} className="p-5 bg-white border-4 border-slate-900 hover:bg-slate-50 transition-all">
+                        <History size={20} />
+                      </button>
+                      {(isAdmin || book.donatoreId === user.uid) && (
+                        <button onClick={() => deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'books', book.id))} className="p-5 border-4 border-slate-900 bg-red-50 text-red-600 hover:bg-red-600 hover:text-white transition-all">
+                          <Trash2 size={20} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </main>
+      </div>
+
+      {/* FOOTER PERSONALIZZATO SQUADRATO */}
+      <footer className="bg-slate-900 text-white border-t-[8px] border-[#cbb26a] py-12 px-10">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-10">
+          <div className="flex items-center gap-8">
+            <div className="w-16 h-16 bg-[#cbb26a] border-4 border-white flex items-center justify-center font-black text-slate-900 text-2xl -rotate-6 shadow-[6px_6px_0px_white]">L</div>
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.4em] text-white italic">I.I.S. "Vincenzo Lilla"</p>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-1">Biblioteca Digitale Ponzini • Polo Liceale Francavilla - Oria</p>
+            </div>
           </div>
-        )}
-      </main>
-
-      <button onClick={() => setShowAddModal(true)} className="fixed bottom-24 right-8 w-16 h-16 bg-[#cbb26a] text-white rounded-full shadow-2xl flex items-center justify-center hover:scale-110 transition-all z-50">
-        <Plus size={32} />
-      </button>
-
-      <footer className="fixed bottom-0 left-0 w-full bg-[#1a365d] text-white py-4 px-6 flex justify-between items-center z-50 border-t border-white/10 shadow-2xl">
-        <div className="flex items-center gap-3">
-          <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-          <span className="text-[10px] font-black tracking-[0.2em] uppercase">Status: Online</span>
-        </div>
-        <div className="text-right">
-          <p className="text-[10px] font-black tracking-[0.2em] uppercase opacity-90">Giovanni Rochira</p>
-          <p className="text-[8px] font-bold text-[#cbb26a] uppercase tracking-widest mt-0.5">I.I.S. "Vincenzo Lilla"</p>
+          <div className="text-center md:text-right border-l-4 border-[#cbb26a] pl-8 py-2">
+            <p className="text-sm font-black uppercase tracking-[0.3em] text-[#cbb26a] mb-2 leading-none italic">Creato da Giovanni Rochira</p>
+            <p className="text-[9px] font-bold text-slate-500 uppercase tracking-[0.5em]">Sviluppo Software • A.S. 2024/2025</p>
+          </div>
         </div>
       </footer>
 
+      {/* MODAL AGGIUNTA LIBRO */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-[#1a365d]/90 backdrop-blur-sm flex items-center justify-center p-6 z-[60]">
-          <div className="bg-white rounded-[2.5rem] w-full max-w-md p-10 shadow-2xl">
-            <h2 className="text-2xl font-bold text-[#1a365d] mb-6">Donazione Libro</h2>
-            <form onSubmit={addBook} className="space-y-6">
-              <input required placeholder="Titolo del libro" className="w-full px-5 py-4 bg-slate-50 rounded-xl outline-none focus:ring-2 focus:ring-[#cbb26a]" value={bookForm.titolo} onChange={(e) => setBookForm({...bookForm, titolo: e.target.value})} />
-              <input required placeholder="Autore" className="w-full px-5 py-4 bg-slate-50 rounded-xl outline-none focus:ring-2 focus:ring-[#cbb26a]" value={bookForm.autore} onChange={(e) => setBookForm({...bookForm, autore: e.target.value})} />
-              <div className="flex gap-4 pt-4">
-                <button type="button" onClick={() => setShowAddModal(false)} className="flex-1 py-4 font-bold text-slate-400 hover:text-slate-600 transition-colors">Annulla</button>
-                <button type="submit" className="flex-[2] bg-[#1a365d] text-white py-4 rounded-xl font-bold hover:bg-[#122641] transition-all shadow-lg">Conferma donazione</button>
+        <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-sm flex items-center justify-center p-6 z-[100]">
+          <div className="bg-white border-[8px] border-slate-900 w-full max-w-2xl p-12 shadow-[25px_25px_0px_#cbb26a]">
+            <div className="flex justify-between items-start mb-10">
+              <h2 className="text-4xl font-black uppercase italic text-slate-900 leading-none">Nuovo Volume</h2>
+              <button onClick={() => setShowAddModal(false)} className="text-4xl font-black">&times;</button>
+            </div>
+            <form onSubmit={handleAddBook} className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              <div className="space-y-6">
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 mb-2 block italic">Titolo dell'Opera</label>
+                  <input required className="w-full p-5 bg-slate-50 border-4 border-slate-100 outline-none focus:border-slate-900 font-bold uppercase" value={bookForm.titolo} onChange={e => setBookForm({...bookForm, titolo: e.target.value})} />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 mb-2 block italic">Autore principale</label>
+                  <input required className="w-full p-5 bg-slate-50 border-4 border-slate-100 outline-none focus:border-slate-900 font-bold uppercase" value={bookForm.autore} onChange={e => setBookForm({...bookForm, autore: e.target.value})} />
+                </div>
+              </div>
+              <div className="space-y-6">
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 mb-2 block italic">Genere / Sezione</label>
+                  <select className="w-full p-5 bg-slate-50 border-4 border-slate-100 outline-none focus:border-slate-900 font-black uppercase" value={bookForm.genere} onChange={e => setBookForm({...bookForm, genere: e.target.value})}>
+                    <option value="Narrativa">Narrativa</option>
+                    <option value="Classici Grechi/Latini">Classici Grechi/Latini</option>
+                    <option value="Saggistica">Saggistica</option>
+                    <option value="Scientifico">Scientifico</option>
+                    <option value="Poesia">Poesia</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 mb-2 block italic">Descrizione (Opzionale)</label>
+                  <input className="w-full p-5 bg-slate-50 border-4 border-slate-100 outline-none focus:border-slate-900 font-bold uppercase" placeholder="BREVE NOTA..." value={bookForm.descrizione} onChange={e => setBookForm({...bookForm, descrizione: e.target.value})} />
+                </div>
+              </div>
+              <div className="md:col-span-2 flex gap-6 mt-8">
+                <button type="submit" className="flex-1 bg-slate-900 text-white py-6 font-black uppercase text-sm tracking-[0.3em] hover:bg-[#cbb26a] hover:text-black transition-all border-b-8 border-slate-950">Conferma Donazione</button>
               </div>
             </form>
           </div>
         </div>
       )}
 
+      {/* MODAL CRONOLOGIA PASSAGGI */}
       {showHistoryModal && (
-        <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-sm flex items-center justify-center p-6 z-[60]">
-          <div className="bg-white rounded-[2.5rem] w-full max-w-sm p-10 max-h-[70vh] overflow-y-auto shadow-2xl">
-            <div className="flex justify-between items-center mb-8">
-              <h2 className="text-xl font-bold text-[#1a365d]">Cronologia</h2>
-              <History size={20} className="text-[#cbb26a]" />
+        <div className="fixed inset-0 bg-slate-900/95 flex items-center justify-center p-6 z-[100]">
+          <div className="bg-white border-[8px] border-slate-900 w-full max-w-md p-10 shadow-[20px_20px_0px_#cbb26a]">
+            <div className="flex justify-between items-center mb-10 border-b-4 border-slate-100 pb-4">
+              <div>
+                <h2 className="text-2xl font-black uppercase italic italic leading-none">{showHistoryModal.titolo}</h2>
+                <p className="text-[10px] font-bold text-slate-400 uppercase mt-2">Log degli spostamenti</p>
+              </div>
+              <History className="text-[#cbb26a]" size={30} />
             </div>
-            <div className="space-y-6">
-              {[...showHistoryModal.cronologia].reverse().map((step, i) => (
-                <div key={i} className="border-l-2 border-slate-100 pl-6 py-1 relative">
-                  <div className="absolute -left-[5px] top-2 w-2 h-2 bg-[#cbb26a] rounded-full"></div>
-                  <p className="text-xs font-black text-slate-700">{step.utente}</p>
-                  <p className="text-[9px] text-slate-400 uppercase font-bold tracking-wider mt-1">{step.tipo} • {new Date(step.data).toLocaleDateString()}</p>
+            <div className="space-y-6 max-h-[45vh] overflow-y-auto pr-4 scrollbar-custom">
+              {[...showHistoryModal.cronologia].reverse().map((log, i) => (
+                <div key={i} className="flex gap-6 border-b-2 border-slate-50 pb-4 last:border-0">
+                  <div className={`w-3 h-3 rounded-full mt-1 ${log.tipo === 'donazione' ? 'bg-[#cbb26a]' : log.tipo === 'prestito' ? 'bg-red-500' : 'bg-green-500'}`}></div>
+                  <div>
+                    <p className="text-xs font-black uppercase text-slate-900 italic">{log.utente}</p>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter mt-1">
+                      {log.tipo} • {new Date(log.data).toLocaleString('it-IT')}
+                    </p>
+                  </div>
                 </div>
               ))}
             </div>
-            <button onClick={() => setShowHistoryModal(null)} className="w-full mt-10 py-4 bg-slate-50 rounded-xl font-bold text-[#1a365d] hover:bg-slate-100 transition-colors">Chiudi finestra</button>
+            <button onClick={() => setShowHistoryModal(null)} className="w-full mt-10 py-5 bg-slate-900 text-white font-black uppercase text-xs tracking-widest hover:bg-[#cbb26a] hover:text-black transition-all">Chiudi Registro</button>
           </div>
         </div>
       )}
+
+      <style>{`
+        .scrollbar-custom::-webkit-scrollbar { width: 6px; }
+        .scrollbar-custom::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 0; border: 2px solid #fff; }
+      `}</style>
     </div>
   );
 }
