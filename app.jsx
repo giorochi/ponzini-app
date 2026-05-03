@@ -25,18 +25,10 @@ import {
   User, 
   Trash2, 
   LogOut, 
-  BookOpen,
-  ArrowRight,
-  ChevronRight,
-  Library,
   History,
   Search,
   Bookmark,
-  AlertCircle,
-  ShieldCheck,
-  Users,
-  Settings,
-  RotateCcw
+  ShieldCheck
 } from 'lucide-react';
 
 // ==========================================
@@ -57,7 +49,7 @@ const firebaseConfig = {
 const ADMIN_EMAIL = "rochiragiovanni87@gmail.com"; 
 const APP_ID = 'ponzini-library-lilla';
 
-// Inizializzazione
+
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -158,7 +150,7 @@ export default function App() {
     const unsubscribe = onSnapshot(booksRef, (snapshot) => {
       const booksList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setBooks(booksList.sort((a, b) => new Date(b.dataLascito) - new Date(a.dataLascito)));
-    });
+    }, (err) => console.error("Errore Snapshot:", err));
     return () => unsubscribe();
   }, [user, isRegistering]);
 
@@ -261,7 +253,7 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-[#fcfdfe] text-slate-800 pb-32 font-sans selection:bg-[#cbb26a]/30">
+    <div className="min-h-screen bg-[#fcfdfe] text-slate-800 pb-32 font-sans">
       <header className="bg-white border-b border-slate-100 sticky top-0 z-40 px-6 py-4">
         <div className="max-w-6xl mx-auto flex justify-between items-center">
           <div className="flex items-center gap-4">
@@ -271,7 +263,6 @@ export default function App() {
               <p className="text-[9px] text-slate-400 uppercase font-bold tracking-tighter">Biblioteca Ponzini</p>
             </div>
           </div>
-          
           <div className="flex items-center gap-4">
             <div className="hidden md:flex items-center bg-slate-50 rounded-xl px-4 py-2 border border-slate-100">
               <Search size={16} className="text-slate-300" />
@@ -343,7 +334,6 @@ export default function App() {
         <Plus size={32} />
       </button>
 
-      {/* Footer Crediti Giovanni */}
       <footer className="fixed bottom-0 left-0 w-full bg-[#1a365d] text-white py-4 px-6 flex justify-between items-center z-50 border-t border-white/10 shadow-[0_-10px_20px_rgba(0,0,0,0.1)]">
         <div className="flex items-center gap-3">
           <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
@@ -355,24 +345,22 @@ export default function App() {
         </div>
       </footer>
 
-      {/* Modal Aggiunta */}
       {showAddModal && (
         <div className="fixed inset-0 bg-[#1a365d]/90 backdrop-blur-sm flex items-center justify-center p-6 z-[60]">
-          <div className="bg-white rounded-[2.5rem] w-full max-w-md p-10 animate-in zoom-in-95">
+          <div className="bg-white rounded-[2.5rem] w-full max-w-md p-10">
             <h2 className="text-2xl font-bold text-[#1a365d] mb-6">Aggiungi Libro</h2>
             <form onSubmit={addBook} className="space-y-6">
               <input required placeholder="Titolo" className="w-full px-5 py-4 bg-slate-50 rounded-xl outline-none" value={bookForm.titolo} onChange={(e) => setBookForm({...bookForm, titolo: e.target.value})} />
               <input required placeholder="Autore" className="w-full px-5 py-4 bg-slate-50 rounded-xl outline-none" value={bookForm.autore} onChange={(e) => setBookForm({...bookForm, autore: e.target.value})} />
               <div className="flex gap-4">
                 <button type="button" onClick={() => setShowAddModal(false)} className="flex-1 py-4 font-bold text-slate-400">Annulla</button>
-                <button type="submit" className="flex-1 bg-[#1a365d] text-white py-4 rounded-xl font-bold">Conferma</button>
+                <button type="submit" className="w-full bg-[#1a365d] text-white py-4 rounded-xl font-bold">Conferma</button>
               </div>
             </form>
           </div>
         </div>
       )}
 
-      {/* Modal Storia */}
       {showHistoryModal && (
         <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-sm flex items-center justify-center p-6 z-[60]">
           <div className="bg-white rounded-[2.5rem] w-full max-w-sm p-10 max-h-[70vh] overflow-y-auto">
