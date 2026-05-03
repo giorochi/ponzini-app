@@ -49,7 +49,6 @@ const firebaseConfig = {
 const ADMIN_EMAIL = "rochiragiovanni87@gmail.com"; 
 const APP_ID = 'ponzini-library-lilla';
 
-
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -80,7 +79,6 @@ export default function App() {
         const isUserAdmin = u.email === ADMIN_EMAIL;
         setIsAdmin(isUserAdmin);
         
-        // Funzione interna per evitare dipendenze esterne non necessarie nel primo useEffect
         const checkProfile = async (currentUser, adminFlag) => {
           try {
             if (adminFlag) {
@@ -103,7 +101,7 @@ export default function App() {
               }
             }
           } catch (error) { 
-            console.error(error); 
+            console.error("Errore profilo:", error); 
           } finally { 
             setLoading(false); 
           }
@@ -118,7 +116,7 @@ export default function App() {
       }
     });
     return () => unsubscribe();
-  }, [db]); // Aggiunta dipendenza minima per stabilità
+  }, []);
 
   const handleGoogleSignIn = async () => {
     setAuthError(null);
@@ -133,6 +131,7 @@ export default function App() {
 
   const handleCompleteRegistration = async (e) => {
     e.preventDefault();
+    if (!user) return;
     const profileData = { 
       nome: user.displayName?.split(' ')[0] || 'Studente',
       cognome: user.displayName?.split(' ').slice(1).join(' ') || 'Lilla',
@@ -146,7 +145,7 @@ export default function App() {
       await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'profile', 'data'), profileData);
       setUserData(profileData);
       setIsRegistering(false);
-    } catch (error) { console.error(error); }
+    } catch (error) { console.error("Errore reg:", error); }
   };
 
   useEffect(() => {
@@ -161,6 +160,7 @@ export default function App() {
 
   const addBook = async (e) => {
     e.preventDefault();
+    if (!userData) return;
     const newBook = {
       titolo: bookForm.titolo,
       autore: bookForm.autore,
@@ -175,43 +175,51 @@ export default function App() {
         data: new Date().toISOString()
       }]
     };
-    await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'books'), newBook);
-    setBookForm({ titolo: '', autore: '' });
-    setShowAddModal(false);
+    try {
+      await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'books'), newBook);
+      setBookForm({ titolo: '', autore: '' });
+      setShowAddModal(false);
+    } catch (error) { console.error("Errore aggiunta:", error); }
   };
 
   const withdrawBook = async (bookId) => {
+    if (!userData) return;
     const bookRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'books', bookId);
-    await updateDoc(bookRef, {
-      status: 'ritirato',
-      presoDaId: user.uid,
-      presoDaNome: `${userData.nome} ${userData.cognome}`,
-      dataRitiro: new Date().toISOString(),
-      cronologia: arrayUnion({
-        tipo: 'prestito',
-        utente: `${userData.nome} ${userData.cognome} (${userData.classe})`,
-        data: new Date().toISOString()
-      })
-    });
+    try {
+      await updateDoc(bookRef, {
+        status: 'ritirato',
+        presoDaId: user.uid,
+        presoDaNome: `${userData.nome} ${userData.cognome}`,
+        dataRitiro: new Date().toISOString(),
+        cronologia: arrayUnion({
+          tipo: 'prestito',
+          utente: `${userData.nome} ${userData.cognome} (${userData.classe})`,
+          data: new Date().toISOString()
+        })
+      });
+    } catch (error) { console.error("Errore ritiro:", error); }
   };
 
   const returnBook = async (bookId) => {
+    if (!userData) return;
     const bookRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'books', bookId);
-    await updateDoc(bookRef, {
-      status: 'disponibile',
-      presoDaId: null,
-      presoDaNome: null,
-      cronologia: arrayUnion({
-        tipo: 'restituzione',
-        utente: `${userData.nome} ${userData.cognome} (${userData.classe})`,
-        data: new Date().toISOString()
-      })
-    });
+    try {
+      await updateDoc(bookRef, {
+        status: 'disponibile',
+        presoDaId: null,
+        presoDaNome: null,
+        cronologia: arrayUnion({
+          tipo: 'restituzione',
+          utente: `${userData.nome} ${userData.cognome} (${userData.classe})`,
+          data: new Date().toISOString()
+        })
+      });
+    } catch (error) { console.error("Errore reso:", error); }
   };
 
   const filteredBooks = books.filter(b => 
-    b.titolo.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    b.autore.toLowerCase().includes(searchTerm.toLowerCase())
+    b.titolo?.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    b.autore?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const availableBooks = filteredBooks.filter(b => b.status === 'disponibile');
@@ -222,7 +230,7 @@ export default function App() {
     <div className="flex items-center justify-center min-h-screen bg-white">
       <div className="text-center">
         <img src={SCHOOL_LOGO} alt="Lilla" className="h-20 mx-auto animate-pulse mb-4" />
-        <p className="text-slate-400 text-[10px] tracking-widest uppercase font-bold">Caricamento...</p>
+        <p className="text-slate-400 text-[10px] tracking-widest uppercase font-bold text-center">Caricamento...</p>
       </div>
     </div>
   );
@@ -251,7 +259,7 @@ export default function App() {
         <h2 className="text-2xl font-bold text-[#1a365d] mb-8">Benvenuto nel Progetto</h2>
         <form onSubmit={handleCompleteRegistration} className="space-y-6">
           <input required placeholder="Inserisci la tua Classe" className="w-full px-6 py-5 bg-slate-50 rounded-2xl outline-none focus:ring-2 focus:ring-[#cbb26a] font-semibold" value={regForm.classe} onChange={(e) => setRegForm({classe: e.target.value})} />
-          <button type="submit" className="w-full bg-[#1a365d] text-white py-5 rounded-2xl font-bold shadow-lg">Inizia subito</button>
+          <button type="submit" className="w-full bg-[#1a365d] text-white py-5 rounded-2xl font-bold shadow-lg text-center">Inizia subito</button>
         </form>
       </div>
     </div>
@@ -274,12 +282,12 @@ export default function App() {
               <input placeholder="Cerca..." className="bg-transparent border-none outline-none ml-2 text-sm w-32" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
             </div>
             <img src={userData?.photoURL} className="w-10 h-10 rounded-xl border-2 border-white shadow-md" alt="" />
-            <button onClick={handleSignOut} className="p-2 text-slate-300 hover:text-red-500"><LogOut size={20} /></button>
+            <button onClick={handleSignOut} className="p-2 text-slate-300 hover:text-red-500 flex items-center justify-center"><LogOut size={20} /></button>
           </div>
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto p-6 mt-8">
+      <main className="max-w-6xl mx-auto p-6 mt-8 text-center">
         <div className="flex flex-col sm:flex-row justify-between items-center mb-10 gap-6">
           <h2 className="text-3xl font-bold text-[#1a365d] flex items-center gap-3">
             {view === 'catalog' ? 'Libri Disponibili' : view === 'history' ? 'I miei Libri' : 'Gestione Admin'}
@@ -294,7 +302,7 @@ export default function App() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {(view === 'catalog' ? availableBooks : view === 'history' ? myBooks : allRetired).map(book => (
-            <div key={book.id} className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 hover:shadow-md transition-all group">
+            <div key={book.id} className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 hover:shadow-md transition-all group text-left">
               <div className="flex justify-between items-start mb-6">
                 <div className="w-10 h-1 bg-[#cbb26a] rounded-full"></div>
                 <Book className="text-slate-100 group-hover:text-[#cbb26a]/20 transition-colors" size={32} />
@@ -319,14 +327,14 @@ export default function App() {
               <div className="mt-8 flex gap-2">
                 {book.status === 'disponibile' ? (
                   <>
-                    <button onClick={() => withdrawBook(book.id)} className="flex-1 bg-[#1a365d] text-white py-3 rounded-xl font-bold text-xs uppercase hover:bg-[#122641]">Prendi</button>
+                    <button onClick={() => withdrawBook(book.id)} className="flex-1 bg-[#1a365d] text-white py-3 rounded-xl font-bold text-xs uppercase hover:bg-[#122641] text-center">Prendi</button>
                     {(isAdmin || book.donatoreId === user.uid) && (
-                      <button onClick={() => deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'books', book.id))} className="p-3 text-slate-200 hover:text-red-500 transition-colors"><Trash2 size={18} /></button>
+                      <button onClick={() => deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'books', book.id))} className="p-3 text-slate-200 hover:text-red-500 transition-colors flex items-center justify-center"><Trash2 size={18} /></button>
                     )}
                   </>
                 ) : (
                   (isAdmin || book.presoDaId === user.uid) && (
-                    <button onClick={() => returnBook(book.id)} className="w-full bg-green-600 text-white py-3 rounded-xl font-bold text-xs uppercase hover:bg-green-700">Restituisci</button>
+                    <button onClick={() => returnBook(book.id)} className="w-full bg-green-600 text-white py-3 rounded-xl font-bold text-xs uppercase hover:bg-green-700 text-center">Restituisci</button>
                   )
                 )}
               </div>
@@ -358,8 +366,8 @@ export default function App() {
               <input required placeholder="Titolo" className="w-full px-5 py-4 bg-slate-50 rounded-xl outline-none" value={bookForm.titolo} onChange={(e) => setBookForm({...bookForm, titolo: e.target.value})} />
               <input required placeholder="Autore" className="w-full px-5 py-4 bg-slate-50 rounded-xl outline-none" value={bookForm.autore} onChange={(e) => setBookForm({...bookForm, autore: e.target.value})} />
               <div className="flex gap-4">
-                <button type="button" onClick={() => setShowAddModal(false)} className="flex-1 py-4 font-bold text-slate-400">Annulla</button>
-                <button type="submit" className="w-full bg-[#1a365d] text-white py-4 rounded-xl font-bold">Conferma</button>
+                <button type="button" onClick={() => setShowAddModal(false)} className="flex-1 py-4 font-bold text-slate-400 text-center">Annulla</button>
+                <button type="submit" className="w-full bg-[#1a365d] text-white py-4 rounded-xl font-bold text-center">Conferma</button>
               </div>
             </form>
           </div>
@@ -372,14 +380,14 @@ export default function App() {
             <h2 className="text-xl font-bold text-[#1a365d] mb-6">Storia del Libro</h2>
             <div className="space-y-6">
               {[...showHistoryModal.cronologia].reverse().map((step, i) => (
-                <div key={i} className="border-l-2 border-slate-100 pl-4 py-1 relative">
+                <div key={i} className="border-l-2 border-slate-100 pl-4 py-1 relative text-left">
                   <div className="absolute -left-[5px] top-2 w-2 h-2 bg-[#cbb26a] rounded-full"></div>
                   <p className="text-xs font-black text-slate-700">{step.utente}</p>
                   <p className="text-[9px] text-slate-400 uppercase font-bold">{step.tipo} - {new Date(step.data).toLocaleDateString()}</p>
                 </div>
               ))}
             </div>
-            <button onClick={() => setShowHistoryModal(null)} className="w-full mt-10 py-4 font-bold text-[#1a365d]">Chiudi</button>
+            <button onClick={() => setShowHistoryModal(null)} className="w-full mt-10 py-4 font-bold text-[#1a365d] text-center">Chiudi</button>
           </div>
         </div>
       )}
