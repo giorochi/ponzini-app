@@ -79,7 +79,37 @@ export default function App() {
         setUser(u);
         const isUserAdmin = u.email === ADMIN_EMAIL;
         setIsAdmin(isUserAdmin);
-        checkUserProfile(u, isUserAdmin);
+        
+        // Funzione interna per evitare dipendenze esterne non necessarie nel primo useEffect
+        const checkProfile = async (currentUser, adminFlag) => {
+          try {
+            if (adminFlag) {
+              setUserData({
+                nome: "Amministrazione",
+                cognome: "Lilla",
+                classe: "Staff Scuola",
+                photoURL: SCHOOL_LOGO,
+                isAdmin: true
+              });
+              setIsRegistering(false);
+            } else {
+              const userRef = doc(db, 'artifacts', APP_ID, 'users', currentUser.uid, 'profile', 'data');
+              const userSnap = await getDoc(userRef);
+              if (userSnap.exists()) {
+                setUserData(userSnap.data());
+                setIsRegistering(false);
+              } else {
+                setIsRegistering(true);
+              }
+            }
+          } catch (error) { 
+            console.error(error); 
+          } finally { 
+            setLoading(false); 
+          }
+        };
+
+        checkProfile(u, isUserAdmin);
       } else {
         setUser(null);
         setUserData(null);
@@ -88,43 +118,18 @@ export default function App() {
       }
     });
     return () => unsubscribe();
-  }, []);
+  }, [db]); // Aggiunta dipendenza minima per stabilità
 
   const handleGoogleSignIn = async () => {
     setAuthError(null);
     try { 
       await signInWithPopup(auth, googleProvider); 
     } catch (error) { 
-      setAuthError("Errore di connessione. Verifica di aver autorizzato il dominio su Firebase.");
+      setAuthError("Errore di connessione. Verifica la configurazione Firebase.");
     }
   };
 
   const handleSignOut = () => signOut(auth);
-
-  const checkUserProfile = async (u, isUserAdmin) => {
-    try {
-      if (isUserAdmin) {
-        setUserData({
-          nome: "Amministrazione",
-          cognome: "Lilla",
-          classe: "Staff Scuola",
-          photoURL: SCHOOL_LOGO,
-          isAdmin: true
-        });
-        setIsRegistering(false);
-      } else {
-        const userRef = doc(db, 'artifacts', APP_ID, 'users', u.uid, 'profile', 'data');
-        const userSnap = await getDoc(userRef);
-        if (userSnap.exists()) {
-          setUserData(userSnap.data());
-          setIsRegistering(false);
-        } else {
-          setIsRegistering(true);
-        }
-      }
-    } catch (error) { console.error(error); } 
-    finally { setLoading(false); }
-  };
 
   const handleCompleteRegistration = async (e) => {
     e.preventDefault();
@@ -148,7 +153,7 @@ export default function App() {
     if (!user || isRegistering) return;
     const booksRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'books');
     const unsubscribe = onSnapshot(booksRef, (snapshot) => {
-      const booksList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const booksList = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
       setBooks(booksList.sort((a, b) => new Date(b.dataLascito) - new Date(a.dataLascito)));
     }, (err) => console.error("Errore Snapshot:", err));
     return () => unsubscribe();
@@ -214,19 +219,19 @@ export default function App() {
   const allRetired = filteredBooks.filter(b => b.status === 'ritirato');
 
   if (loading) return (
-    <div className="flex items-center justify-center min-h-screen bg-white font-sans">
+    <div className="flex items-center justify-center min-h-screen bg-white">
       <div className="text-center">
         <img src={SCHOOL_LOGO} alt="Lilla" className="h-20 mx-auto animate-pulse mb-4" />
-        <p className="text-slate-400 text-[10px] tracking-widest uppercase font-bold">Caricamento Archivio...</p>
+        <p className="text-slate-400 text-[10px] tracking-widest uppercase font-bold">Caricamento...</p>
       </div>
     </div>
   );
 
   if (!user) return (
-    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 font-sans">
+    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6">
       <div className="bg-white p-12 rounded-[2.5rem] shadow-xl w-full max-w-md text-center border border-slate-100">
         <img src={SCHOOL_LOGO} alt="Lilla" className="h-32 mx-auto mb-8" />
-        <h1 className="text-3xl font-serif font-bold text-[#1a365d] mb-2">Progetto Ponzini</h1>
+        <h1 className="text-3xl font-bold text-[#1a365d] mb-2">Progetto Ponzini</h1>
         <p className="text-slate-400 text-[10px] uppercase tracking-[0.3em] font-bold mb-10 italic">I.I.S. "Vincenzo Lilla"</p>
         
         {authError && <div className="mb-6 p-4 bg-red-50 text-red-600 text-xs rounded-xl">{authError}</div>}
@@ -241,7 +246,7 @@ export default function App() {
   );
 
   if (isRegistering) return (
-    <div className="min-h-screen bg-white flex items-center justify-center p-4 font-sans">
+    <div className="min-h-screen bg-white flex items-center justify-center p-4">
       <div className="w-full max-w-sm text-center">
         <h2 className="text-2xl font-bold text-[#1a365d] mb-8">Benvenuto nel Progetto</h2>
         <form onSubmit={handleCompleteRegistration} className="space-y-6">
@@ -253,7 +258,7 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-[#fcfdfe] text-slate-800 pb-32 font-sans">
+    <div className="min-h-screen bg-[#fcfdfe] text-slate-800 pb-32">
       <header className="bg-white border-b border-slate-100 sticky top-0 z-40 px-6 py-4">
         <div className="max-w-6xl mx-auto flex justify-between items-center">
           <div className="flex items-center gap-4">
@@ -340,7 +345,7 @@ export default function App() {
           <span className="text-[10px] font-black tracking-[0.2em] uppercase">Sistema Attivo</span>
         </div>
         <div className="text-right">
-          <p className="text-[11px] font-black tracking-[0.25em] uppercase opacity-90">Progetto Sviluppato da Giovanni Rochira</p>
+          <p className="text-[11px] font-black tracking-[0.25em] uppercase opacity-90">Sviluppato da Giovanni Rochira</p>
           <p className="text-[8px] font-bold text-[#cbb26a] uppercase tracking-widest mt-0.5">Versione 1.0 - Biblioteca Lilla</p>
         </div>
       </footer>
