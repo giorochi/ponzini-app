@@ -2,16 +2,16 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getFirestore, collection, doc, addDoc, updateDoc, onSnapshot, 
-  setDoc, getDoc, deleteDoc, arrayUnion, query, orderBy, limit
+  setDoc, getDoc, deleteDoc, query, orderBy, limit
 } from 'firebase/firestore';
 import { 
-  getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut
+  getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, signInAnonymously
 } from 'firebase/auth';
 import { 
   Plus, Book, User, Trash2, LogOut, Search, Bookmark, 
   ShieldCheck, Users, LayoutDashboard, Calendar, 
   BookOpen, ArrowRightLeft, ArrowDownCircle, History,
-  Clock, Globe, CheckCircle2, AlertCircle, Trash
+  Clock, Globe, CheckCircle2, AlertCircle, Trash, MoveRight
 } from 'lucide-react';
 
 // ==========================================
@@ -26,8 +26,7 @@ const firebaseConfig = {
   messagingSenderId: "748836692117",
   appId: "1:748836692117:web:ffb5a7f5df36ffdb5afb9c"
 };
-
-const APP_ID = 'ponzini-v3-exchange';
+const APP_ID = 'ponzini-v4-final';
 const ADMIN_EMAILS = ["rochiragiovanni87@gmail.com", "admin@iisslilla.it"];
 
 const app = initializeApp(firebaseConfig);
@@ -45,65 +44,72 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [isRegistering, setIsRegistering] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [error, setError] = useState(null);
 
   // Modali
-  const [showAddModal, setShowAddModal] = useState(false); // Dona
-  const [showExchangeModal, setShowExchangeModal] = useState(null); // Scambia
-  
-  const [form, setForm] = useState({ titolo: '', autore: '', genere: 'Narrativa' });
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [showExchangeModal, setShowExchangeModal] = useState(null);
+  const [form, setForm] = useState({ titolo: '', autore: '', genere: 'Narrativa', classe: '' });
 
+  // 1. Gestione Autenticazione
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (u) => {
-      if (u) {
-        setUser(u);
+    const initAuth = async () => {
+      try {
+        // Tentiamo il login anonimo se non c'è token, o attendiamo il popup
+        if (!auth.currentUser) await signInAnonymously(auth);
+      } catch (e) { console.error("Auth error", e); }
+    };
+    initAuth();
+
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      if (u && !u.isAnonymous) {
         const userRef = doc(db, 'artifacts', APP_ID, 'users', u.uid, 'profile', 'data');
-        const snap = await getDoc(userRef);
-        if (snap.exists()) {
-          setUserData(snap.data());
-          setIsRegistering(false);
-        } else {
-          setIsRegistering(true);
-        }
+        onSnapshot(userRef, (snap) => {
+          if (snap.exists()) {
+            setUserData(snap.data());
+            setIsRegistering(false);
+          } else {
+            setIsRegistering(true);
+          }
+          setLoading(false);
+        }, () => setLoading(false));
       } else {
-        setUser(null);
+        setLoading(false);
       }
-      setLoading(false);
     });
     return unsub;
   }, []);
 
+  // 2. Caricamento Dati (Solo se loggati)
   useEffect(() => {
-    if (!user || isRegistering) return;
+    if (!user) return;
 
     const bRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'books');
     const unsubBooks = onSnapshot(bRef, (snap) => {
       setBooks(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
+    }, (err) => console.error("Books feed error", err));
 
     const lRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'logs');
     const unsubLogs = onSnapshot(lRef, (snap) => {
-      const sortedLogs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-      setLogs(sortedLogs);
+      setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)));
     });
 
-    if (ADMIN_EMAILS.includes(user.email)) {
+    if (user && ADMIN_EMAILS.includes(user.email)) {
       const uRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'user_directory');
       onSnapshot(uRef, (snap) => setUsersList(snap.docs.map(d => d.data())));
     }
-  }, [user, isRegistering]);
+  }, [user]);
 
   const isAdmin = user && ADMIN_EMAILS.includes(user.email);
 
-  // --- AZIONI CORE ---
-
   const createLog = async (tipo, dettaglio, libroTitolo) => {
+    if (!user) return;
     await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'logs'), {
       tipo,
       dettaglio,
       libro: libroTitolo,
-      utente: user.displayName,
+      utente: user.displayName || 'Anonimo',
       classe: userData?.classe || 'N/A',
       timestamp: new Date().toISOString()
     });
@@ -112,145 +118,172 @@ export default function App() {
   const handleDona = async (e) => {
     e.preventDefault();
     if (!form.titolo) return;
-    const newBook = { ...form, status: 'disponibile', dataInserimento: new Date().toISOString() };
+    const newBook = { titolo: form.titolo, autore: form.autore, genere: form.genere, status: 'disponibile', dataInserimento: new Date().toISOString() };
     await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'books'), newBook);
-    await createLog('DONAZIONE', `Ha donato un nuovo volume`, form.titolo);
-    setForm({ titolo: '', autore: '', genere: 'Narrativa' });
+    await createLog('DONAZIONE', `Ha donato un nuovo libro`, form.titolo);
     setShowAddModal(false);
+    setForm({ titolo: '', autore: '', genere: 'Narrativa', classe: '' });
   };
 
   const handlePrendi = async (book) => {
     await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'books', book.id));
-    await createLog('RITIRO', `Ha prelevato il volume (rimosso dal catalogo)`, book.titolo);
+    await createLog('RITIRO', `Ha preso il libro`, book.titolo);
   };
 
   const handleScambio = async (e) => {
     e.preventDefault();
     if (!form.titolo || !showExchangeModal) return;
-    
-    // 1. Rimuovi il vecchio
     await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'books', showExchangeModal.id));
-    // 2. Aggiungi il nuovo
-    const newBook = { ...form, status: 'disponibile', dataInserimento: new Date().toISOString() };
+    const newBook = { titolo: form.titolo, autore: form.autore, genere: form.genere, status: 'disponibile', dataInserimento: new Date().toISOString() };
     await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'books'), newBook);
-    // 3. Log
     await createLog('SCAMBIO', `Ha scambiato "${showExchangeModal.titolo}" con un nuovo volume`, form.titolo);
-    
-    setForm({ titolo: '', autore: '', genere: 'Narrativa' });
     setShowExchangeModal(null);
+    setForm({ titolo: '', autore: '', genere: 'Narrativa', classe: '' });
   };
 
-  if (loading) return <div className="h-screen flex items-center justify-center bg-slate-50 text-slate-400 font-bold uppercase text-[10px] tracking-widest animate-pulse">Caricamento Ponzini Hub...</div>;
+  if (loading) return (
+    <div className="h-screen flex flex-col items-center justify-center bg-indigo-50">
+      <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+      <p className="text-indigo-900 font-bold animate-pulse">Connessione alla Biblioteca...</p>
+    </div>
+  );
 
-  if (!user) return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
-      <div className="bg-white border border-slate-200 p-8 w-full max-w-sm rounded-2xl shadow-xl text-center">
-        <div className="w-16 h-16 bg-slate-900 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg rotate-3">
-          <BookOpen className="text-white" size={32} />
+  if (!user || user.isAnonymous) return (
+    <div className="min-h-screen bg-gradient-to-br from-indigo-100 via-white to-purple-100 flex items-center justify-center p-6">
+      <div className="bg-white p-10 w-full max-w-md rounded-3xl shadow-2xl border border-indigo-50 text-center">
+        <div className="w-20 h-20 bg-indigo-600 rounded-3xl flex items-center justify-center mx-auto mb-8 shadow-xl rotate-3">
+          <BookOpen className="text-white" size={40} />
         </div>
-        <h1 className="text-xl font-black uppercase tracking-tighter mb-2 italic">Ponzini Exchange</h1>
-        <p className="text-slate-400 text-[10px] uppercase font-bold tracking-widest mb-8 italic">I.I.S. "V. Lilla" - Oria/Francavilla</p>
-        <button onClick={() => signInWithPopup(auth, googleProvider)} className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold uppercase text-[10px] tracking-widest flex items-center justify-center gap-3 hover:bg-slate-800 transition-all shadow-md">
-          <Globe size={16} /> Entra con Google
+        <h1 className="text-3xl font-extrabold text-slate-900 mb-2 tracking-tight">Ponzini Digital Hub</h1>
+        <p className="text-slate-500 mb-10">Il portale per lo scambio libri dell'I.I.S. "V. Lilla"</p>
+        <button 
+          onClick={() => signInWithPopup(auth, googleProvider)}
+          className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 hover:bg-indigo-700 transition-all hover:scale-[1.02] shadow-lg shadow-indigo-200"
+        >
+          <Globe size={20} /> Accedi con Google
         </button>
+        <p className="mt-8 text-xs text-slate-400 font-medium uppercase tracking-widest">Riservato a studenti e docenti</p>
       </div>
     </div>
   );
 
   if (isRegistering) return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-      <div className="bg-white border border-slate-200 p-8 w-full max-w-sm rounded-2xl shadow-xl">
-        <h2 className="text-sm font-black uppercase mb-6 italic flex items-center gap-2"><User size={18}/> Completa Profilo</h2>
-        <div className="space-y-4">
+    <div className="min-h-screen bg-indigo-50 flex items-center justify-center p-6">
+      <div className="bg-white p-8 w-full max-w-md rounded-3xl shadow-xl border border-indigo-100">
+        <h2 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-3"><User className="text-indigo-600" /> Profilo Studente</h2>
+        <div className="space-y-5">
           <div>
-            <label className="text-[9px] font-black text-slate-400 uppercase ml-1">Tua Classe</label>
-            <input placeholder="es. 4A LING" className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-bold uppercase" value={form.classe} onChange={e => setForm({...form, classe: e.target.value})} />
+            <label className="block text-sm font-semibold text-slate-700 mb-2">La tua Classe (es. 3B LING)</label>
+            <input 
+              placeholder="Inserisci classe e sezione..." 
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 focus:ring-2 ring-indigo-500 outline-none transition-all"
+              value={form.classe} 
+              onChange={e => setForm({...form, classe: e.target.value})} 
+            />
           </div>
-          <button onClick={async () => {
-            const profile = { uid: user.uid, nome: user.displayName, email: user.email, classe: form.classe };
-            await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'profile', 'data'), profile);
-            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'user_directory', user.uid), profile);
-            setUserData(profile);
-            setIsRegistering(false);
-          }} className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold uppercase text-[10px] tracking-widest shadow-lg">Attiva Accesso</button>
+          <button 
+            onClick={async () => {
+              if (!form.classe) return;
+              const profile = { uid: user.uid, nome: user.displayName, email: user.email, classe: form.classe.toUpperCase() };
+              await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'profile', 'data'), profile);
+              await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'user_directory', user.uid), profile);
+              setUserData(profile);
+              setIsRegistering(false);
+            }}
+            className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-100 transition-all"
+          >
+            Configura Accesso
+          </button>
         </div>
       </div>
     </div>
   );
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] text-slate-800 text-[12px] font-sans">
-      {/* TOP NAV COMPATTA */}
-      <header className="h-12 bg-white border-b border-slate-200 sticky top-0 z-50 flex items-center justify-between px-4">
-        <div className="flex items-center gap-3">
-          <div className="w-7 h-7 bg-slate-900 rounded-lg flex items-center justify-center text-white"><BookOpen size={14}/></div>
-          <span className="font-black uppercase tracking-tighter text-[11px] hidden sm:block italic">Biblioteca Ponzini</span>
+    <div className="min-h-screen bg-[#fcfdff] text-slate-800 flex flex-col font-sans">
+      {/* HEADER PRINCIPALE */}
+      <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between sticky top-0 z-50 shadow-sm">
+        <div className="flex items-center gap-4">
+          <div className="bg-indigo-600 p-2 rounded-xl text-white shadow-lg shadow-indigo-100"><BookOpen size={24}/></div>
+          <div>
+            <h1 className="text-xl font-black text-slate-900 leading-none">Ponzini Hub</h1>
+            <p className="text-[11px] font-bold text-indigo-500 uppercase tracking-wider mt-1">I.I.S. Vincenzo Lilla</p>
+          </div>
         </div>
 
-        <div className="flex-1 max-w-md mx-6 relative group">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-slate-900 transition-colors" size={12} />
+        <div className="hidden md:flex flex-1 max-w-xl mx-12 relative">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
           <input 
-            placeholder="Cerca titolo o autore..." 
-            className="w-full bg-slate-100 border-none rounded-full h-8 pl-9 pr-4 text-[11px] focus:ring-1 ring-slate-300 transition-all"
+            placeholder="Cerca un libro nel catalogo..." 
+            className="w-full bg-slate-100 border-none rounded-2xl py-3 pl-12 pr-4 text-sm focus:ring-2 ring-indigo-500 transition-all"
             value={searchTerm}
             onChange={e => setSearchTerm(e.target.value)}
           />
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="hidden sm:block text-right">
-            <p className="font-bold text-[10px] leading-none uppercase">{user.displayName}</p>
-            <p className="text-[8px] text-slate-400 font-bold uppercase leading-none mt-0.5">{userData?.classe}</p>
+        <div className="flex items-center gap-4">
+          <div className="text-right hidden sm:block">
+            <p className="font-bold text-sm text-slate-900 leading-none">{user.displayName}</p>
+            <p className="text-xs font-medium text-slate-400 mt-1 uppercase">{userData?.classe}</p>
           </div>
-          <button onClick={() => signOut(auth)} className="w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center text-slate-400 hover:text-red-500 border border-slate-200 transition-all"><LogOut size={14}/></button>
+          <button onClick={() => signOut(auth)} className="p-2.5 rounded-xl bg-slate-50 text-slate-400 hover:text-red-600 hover:bg-red-50 border border-slate-200 transition-all"><LogOut size={20}/></button>
         </div>
       </header>
 
-      <div className="flex">
-        {/* SIDEBAR DENSE */}
-        <nav className="w-16 md:w-48 border-r border-slate-200 min-h-[calc(100vh-3rem)] bg-white p-2 flex flex-col gap-1">
-          <SidebarLink active={view === 'catalog'} icon={<LayoutDashboard size={16}/>} label="Libri Disponibili" onClick={() => setView('catalog')} />
-          <SidebarLink active={view === 'logs'} icon={<History size={16}/>} label="Lista Movimenti" onClick={() => setView('logs')} />
+      <div className="flex flex-1">
+        {/* NAVIGAZIONE LATERALE */}
+        <aside className="w-20 lg:w-64 border-r border-slate-200 bg-white p-4 flex flex-col gap-2">
+          <NavBtn active={view === 'catalog'} icon={<LayoutDashboard/>} label="Catalogo Libri" onClick={() => setView('catalog')} />
+          <NavBtn active={view === 'logs'} icon={<History/>} label="Movimenti" onClick={() => setView('logs')} />
           
           {isAdmin && (
-            <div className="mt-4 pt-4 border-t border-slate-100">
-              <p className="px-3 text-[8px] font-black text-slate-400 uppercase mb-2 hidden md:block">Amministrazione</p>
-              <SidebarLink active={view === 'admin'} icon={<ShieldCheck size={16}/>} label="Gestione Hub" onClick={() => setView('admin')} />
-              <SidebarLink active={view === 'users'} icon={<Users size={16}/>} label="Elenco Utenti" onClick={() => setView('users')} />
+            <div className="mt-8 space-y-2">
+              <p className="px-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4">Admin Area</p>
+              <NavBtn active={view === 'admin'} icon={<ShieldCheck/>} label="Gestione" onClick={() => setView('admin')} />
+              <NavBtn active={view === 'users'} icon={<Users/>} label="Studenti" onClick={() => setView('users')} />
             </div>
           )}
-        </nav>
+        </aside>
 
-        {/* CONTENT */}
-        <main className="flex-1 p-4 md:p-6 overflow-x-hidden">
+        {/* AREA CONTENUTI */}
+        <main className="flex-1 p-6 lg:p-10">
           {view === 'catalog' && (
             <>
-              <div className="flex justify-between items-end mb-6">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-10">
                 <div>
-                  <h2 className="text-lg font-black uppercase italic tracking-tight">Catalogo Attuale</h2>
-                  <p className="text-slate-400 text-[10px] uppercase font-bold tracking-widest">{books.length} Volumi Pronti allo Scambio</p>
+                  <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">Catalogo Libri</h2>
+                  <p className="text-slate-500 font-medium mt-1">Prendi, dona o scambia volumi con altri studenti.</p>
                 </div>
-                <button onClick={() => { setForm({titolo:'', autore:'', genere:'Narrativa'}); setShowAddModal(true); }} className="bg-slate-900 text-white px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest flex items-center gap-2 hover:scale-105 active:scale-95 transition-all shadow-md">
-                  <Plus size={14}/> Dona Libro
+                <button 
+                  onClick={() => { setForm({titolo:'', autore:'', genere:'Narrativa', classe:''}); setShowAddModal(true); }}
+                  className="bg-indigo-600 text-white px-6 py-4 rounded-2xl font-bold flex items-center gap-3 hover:bg-indigo-700 shadow-xl shadow-indigo-100 transition-all hover:scale-[1.03]"
+                >
+                  <Plus size={20}/> Dona un libro
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
                 {books.filter(b => b.titolo.toLowerCase().includes(searchTerm.toLowerCase())).map(book => (
-                  <div key={book.id} className="bg-white border border-slate-200 rounded-xl p-4 hover:border-slate-400 transition-all group shadow-sm flex flex-col">
-                    <div className="flex justify-between items-start mb-3">
-                      <span className="text-[8px] font-black uppercase bg-slate-100 text-slate-500 px-2 py-0.5 rounded tracking-tighter italic">{book.genere}</span>
-                      <Book className="text-slate-200 group-hover:text-slate-400 transition-colors" size={16}/>
+                  <div key={book.id} className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm hover:shadow-xl hover:border-indigo-200 transition-all group flex flex-col">
+                    <div className="flex justify-between items-start mb-6">
+                      <span className="bg-indigo-50 text-indigo-700 text-[10px] font-bold uppercase px-3 py-1 rounded-full">{book.genere}</span>
+                      <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-300 group-hover:text-indigo-600 group-hover:bg-indigo-50 transition-all"><Book size={20}/></div>
                     </div>
-                    <h3 className="font-bold text-[13px] leading-tight mb-1">{book.titolo}</h3>
-                    <p className="text-slate-400 text-[11px] mb-4 italic leading-tight">{book.autore || 'Autore Sconosciuto'}</p>
+                    <h3 className="text-lg font-bold text-slate-900 leading-tight mb-2">{book.titolo}</h3>
+                    <p className="text-slate-500 font-medium italic mb-8">{book.autore || 'Autore non specificato'}</p>
                     
-                    <div className="mt-auto grid grid-cols-2 gap-2 pt-3 border-t border-slate-50">
-                      <button onClick={() => handlePrendi(book)} className="flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-slate-100 hover:bg-red-50 hover:text-red-600 hover:border-red-100 transition-all font-bold text-[9px] uppercase">
-                        <ArrowDownCircle size={12}/> Prendi
+                    <div className="mt-auto flex flex-col gap-2">
+                      <button 
+                        onClick={() => handlePrendi(book)}
+                        className="w-full py-3 px-4 rounded-xl border border-slate-100 bg-slate-50 text-slate-600 font-bold text-sm flex items-center justify-center gap-2 hover:bg-red-50 hover:text-red-600 hover:border-red-100 transition-all"
+                      >
+                        <ArrowDownCircle size={18}/> Prendi Libro
                       </button>
-                      <button onClick={() => { setForm({titolo:'', autore:'', genere:'Narrativa'}); setShowExchangeModal(book); }} className="flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-slate-50 hover:bg-slate-900 hover:text-white transition-all font-bold text-[9px] uppercase">
-                        <ArrowRightLeft size={12}/> Scambia
+                      <button 
+                        onClick={() => { setForm({titolo:'', autore:'', genere:'Narrativa', classe:''}); setShowExchangeModal(book); }}
+                        className="w-full py-3 px-4 rounded-xl bg-indigo-600 text-white font-bold text-sm flex items-center justify-center gap-2 hover:bg-indigo-700 transition-all"
+                      >
+                        <ArrowRightLeft size={18}/> Scambia con il mio
                       </button>
                     </div>
                   </div>
@@ -260,144 +293,132 @@ export default function App() {
           )}
 
           {view === 'logs' && (
-            <div className="max-w-4xl">
-              <h2 className="text-lg font-black uppercase italic mb-6">Registro Attività</h2>
-              <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 text-[9px] font-black uppercase text-slate-400 border-b border-slate-100">
-                      <th className="px-4 py-3">Evento</th>
-                      <th className="px-4 py-3">Utente / Classe</th>
-                      <th className="px-4 py-3">Dettaglio / Libro</th>
-                      <th className="px-4 py-3 text-right">Data e Ora</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-50">
-                    {logs.map(log => (
-                      <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="px-4 py-3">
-                          <span className={`text-[8px] font-black px-2 py-0.5 rounded ${
-                            log.tipo === 'DONAZIONE' ? 'bg-green-100 text-green-700' :
-                            log.tipo === 'RITIRO' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'
-                          }`}>
-                            {log.tipo}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="font-bold text-[10px]">{log.utente}</div>
-                          <div className="text-[9px] text-slate-400 uppercase font-bold">{log.classe}</div>
-                        </td>
-                        <td className="px-4 py-3 font-medium text-slate-600 italic">
-                          "{log.libro}" <br/>
-                          <span className="text-[9px] not-italic text-slate-400 font-bold">{log.dettaglio}</span>
-                        </td>
-                        <td className="px-4 py-3 text-right text-slate-400 font-mono text-[10px]">
-                          {new Date(log.timestamp).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                        </td>
+            <div className="max-w-5xl mx-auto">
+              <h2 className="text-3xl font-extrabold text-slate-900 mb-8 tracking-tight italic">Registro Movimenti</h2>
+              <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-lg">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-100">
+                        <th className="px-6 py-5 text-xs font-bold uppercase text-slate-400 tracking-widest">Evento</th>
+                        <th className="px-6 py-5 text-xs font-bold uppercase text-slate-400 tracking-widest">Studente</th>
+                        <th className="px-6 py-5 text-xs font-bold uppercase text-slate-400 tracking-widest">Dettaglio</th>
+                        <th className="px-6 py-5 text-xs font-bold uppercase text-slate-400 tracking-widest text-right">Data</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {logs.map(log => (
+                        <tr key={log.id} className="hover:bg-indigo-50/30 transition-colors">
+                          <td className="px-6 py-5">
+                            <span className={`text-[10px] font-black px-3 py-1 rounded-full ${
+                              log.tipo === 'DONAZIONE' ? 'bg-green-100 text-green-700' :
+                              log.tipo === 'RITIRO' ? 'bg-red-100 text-red-700' : 'bg-indigo-100 text-indigo-700'
+                            }`}>
+                              {log.tipo}
+                            </span>
+                          </td>
+                          <td className="px-6 py-5">
+                            <div className="font-bold text-slate-900">{log.utente}</div>
+                            <div className="text-xs text-slate-400 font-bold uppercase tracking-tighter">{log.classe}</div>
+                          </td>
+                          <td className="px-6 py-5">
+                            <div className="flex items-center gap-2">
+                              <Book size={14} className="text-slate-300" />
+                              <span className="font-bold text-slate-700 italic">"{log.libro}"</span>
+                            </div>
+                            <p className="text-[11px] text-slate-400 mt-1">{log.dettaglio}</p>
+                          </td>
+                          <td className="px-6 py-5 text-right font-mono text-xs text-slate-400">
+                            {new Date(log.timestamp).toLocaleDateString('it-IT')} {new Date(log.timestamp).toLocaleTimeString('it-IT', {hour:'2-digit', minute:'2-digit'})}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}
 
           {view === 'admin' && (
-            <div className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <StatBox label="Totale Libri" value={books.length} color="blue" />
-                <StatBox label="Operazioni Totali" value={logs.length} color="slate" />
-                <StatBox label="Utenti Attivi" value={usersList.length} color="green" />
+            <div className="max-w-4xl space-y-8">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+                <StatCard label="Libri in Catalogo" value={books.length} icon={<Book/>} />
+                <StatCard label="Log Registrati" value={logs.length} icon={<History/>} />
+                <StatCard label="Studenti Iscritti" value={usersList.length} icon={<Users/>} />
               </div>
 
-              <div className="bg-white border border-slate-200 rounded-xl p-6">
-                <h3 className="font-black uppercase text-xs italic mb-4">Gestione Rapida Catalogo</h3>
-                <div className="grid grid-cols-1 gap-2">
-                   {books.map(b => (
-                     <div key={b.id} className="flex items-center justify-between p-2 bg-slate-50 rounded-lg hover:bg-slate-100 transition-all">
-                       <div className="flex items-center gap-3">
-                         <div className="font-bold text-[11px] leading-none">{b.titolo}</div>
-                         <div className="text-[9px] text-slate-400 uppercase font-black italic">{b.autore}</div>
-                       </div>
-                       <button onClick={async () => { if(window.confirm('Rimuovere definitivamente?')) await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'books', b.id)) }} className="p-1.5 text-slate-300 hover:text-red-500"><Trash size={14}/></button>
-                     </div>
-                   ))}
+              <div className="bg-white border border-slate-200 rounded-3xl p-8 shadow-sm">
+                <h3 className="text-xl font-bold text-slate-900 mb-6">Manutenzione Catalogo</h3>
+                <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
+                  {books.map(b => (
+                    <div key={b.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl hover:bg-slate-100 transition-all border border-transparent hover:border-slate-200">
+                      <div>
+                        <p className="font-bold text-slate-900">{b.titolo}</p>
+                        <p className="text-xs text-slate-500 uppercase tracking-wider">{b.autore}</p>
+                      </div>
+                      <button onClick={async () => { if(confirm('Eliminare questo libro?')) await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'books', b.id)) }} className="text-slate-300 hover:text-red-500 p-2"><Trash size={20}/></button>
+                    </div>
+                  ))}
                 </div>
               </div>
 
-              <div className="bg-red-50 border border-red-100 rounded-xl p-6">
-                <h3 className="font-black uppercase text-xs text-red-700 italic mb-4 flex items-center gap-2"><AlertCircle size={16}/> Zona Pericolosa</h3>
-                <button onClick={async () => {
-                   if(window.confirm('Vuoi davvero cancellare TUTTI i log delle attività?')) {
-                     for(const l of logs) await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'logs', l.id));
-                   }
-                }} className="text-[9px] font-black uppercase bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 shadow-sm">Svuota Registro Attività</button>
+              <div className="bg-red-50 border border-red-100 rounded-3xl p-8">
+                <h3 className="text-lg font-bold text-red-800 mb-2 flex items-center gap-2"><AlertCircle/> Azioni Critiche</h3>
+                <p className="text-red-600/70 text-sm mb-6">Attenzione: queste azioni sono irreversibili e cancelleranno i dati pubblici.</p>
+                <button onClick={async () => { if(confirm('Svuotare tutto il registro dei movimenti?')) { for(const l of logs) await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'logs', l.id)) } }} className="bg-red-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-red-700 shadow-lg shadow-red-100">Svuota Registro Movimenti</button>
               </div>
             </div>
-          )}
-
-          {view === 'users' && (
-             <div className="max-w-xl">
-               <h2 className="text-lg font-black uppercase italic mb-6 text-slate-400">Directory Utenti</h2>
-               <div className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-100 overflow-hidden shadow-sm">
-                 {usersList.map(u => (
-                   <div key={u.uid} className="p-4 flex items-center justify-between hover:bg-slate-50 transition-all">
-                     <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center font-black text-slate-400">{u.nome?.charAt(0)}</div>
-                        <div>
-                          <div className="font-bold uppercase text-[11px]">{u.nome}</div>
-                          <div className="text-[9px] text-slate-400">{u.email}</div>
-                        </div>
-                     </div>
-                     <span className="text-[9px] font-black bg-slate-100 px-3 py-1 rounded-full uppercase italic tracking-tighter text-slate-600">{u.classe}</span>
-                   </div>
-                 ))}
-               </div>
-             </div>
           )}
         </main>
       </div>
 
-      {/* MODALI (DONA / SCAMBIA) */}
+      {/* MODALI DI INSERIMENTO */}
       {(showAddModal || showExchangeModal) && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-[2px] flex items-center justify-center p-4 z-[100] animate-in fade-in duration-200">
-          <div className="bg-white border border-slate-200 w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden">
-            <div className="bg-slate-900 p-4 text-white flex justify-between items-center">
-              <h3 className="font-black uppercase text-[10px] tracking-widest italic flex items-center gap-2">
-                {showExchangeModal ? <ArrowRightLeft size={14}/> : <Plus size={14}/>}
-                {showExchangeModal ? 'Procedi allo Scambio' : 'Dona un libro'}
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-6 animate-in fade-in zoom-in duration-200">
+          <div className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl overflow-hidden border border-white/20">
+            <div className="bg-indigo-600 p-8 text-white">
+              <h3 className="text-2xl font-extrabold flex items-center gap-4">
+                {showExchangeModal ? <ArrowRightLeft size={28}/> : <Plus size={28}/>}
+                {showExchangeModal ? 'Scambio Libro' : 'Dona un libro'}
               </h3>
-              <button onClick={() => { setShowAddModal(false); setShowExchangeModal(null); }} className="text-slate-400 hover:text-white"><Trash2 size={16}/></button>
+              <p className="text-indigo-100 mt-2 font-medium">Inserisci i dettagli del volume che stai lasciando in biblioteca.</p>
             </div>
             
-            <form onSubmit={showExchangeModal ? handleScambio : handleDona} className="p-6 space-y-4">
+            <form onSubmit={showExchangeModal ? handleScambio : handleDona} className="p-8 space-y-6">
               {showExchangeModal && (
-                <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 mb-2">
-                  <p className="text-[8px] font-black uppercase text-slate-400 mb-1 leading-none">Stai restituendo:</p>
-                  <p className="text-[11px] font-bold text-slate-900">{showExchangeModal.titolo}</p>
+                <div className="bg-indigo-50 p-5 rounded-2xl border border-indigo-100 flex items-center gap-4">
+                  <div className="p-3 bg-white rounded-xl text-indigo-600"><BookOpen size={24}/></div>
+                  <div>
+                    <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Stai restituendo</p>
+                    <p className="font-bold text-slate-800 text-lg">"{showExchangeModal.titolo}"</p>
+                  </div>
                 </div>
               )}
               
-              <div className="space-y-4">
+              <div className="grid grid-cols-1 gap-6">
                 <div>
-                  <label className="text-[8px] font-black text-slate-400 uppercase ml-1">Titolo del libro che lasci</label>
-                  <input required className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-bold" value={form.titolo} onChange={e => setForm({...form, titolo: e.target.value})} />
+                  <label className="block text-sm font-bold text-slate-700 mb-2 ml-1">Titolo del Libro</label>
+                  <input required placeholder="Esempio: Il fu Mattia Pascal" className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 text-base focus:ring-2 ring-indigo-500 outline-none transition-all font-medium" value={form.titolo} onChange={e => setForm({...form, titolo: e.target.value})} />
                 </div>
                 <div>
-                  <label className="text-[8px] font-black text-slate-400 uppercase ml-1">Autore</label>
-                  <input className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-bold" value={form.autore} onChange={e => setForm({...form, autore: e.target.value})} />
+                  <label className="block text-sm font-bold text-slate-700 mb-2 ml-1">Autore</label>
+                  <input required placeholder="Esempio: Luigi Pirandello" className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 text-base focus:ring-2 ring-indigo-500 outline-none transition-all font-medium" value={form.autore} onChange={e => setForm({...form, autore: e.target.value})} />
                 </div>
                 <div>
-                  <label className="text-[8px] font-black text-slate-400 uppercase ml-1">Genere</label>
-                  <select className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-bold" value={form.genere} onChange={e => setForm({...form, genere: e.target.value})}>
-                    <option>Narrativa</option><option>Saggistica</option><option>Classici</option><option>Scientifico</option><option>Lingue</option>
+                  <label className="block text-sm font-bold text-slate-700 mb-2 ml-1">Genere Literario</label>
+                  <select className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 text-base focus:ring-2 ring-indigo-500 outline-none transition-all font-bold appearance-none cursor-pointer" value={form.genere} onChange={e => setForm({...form, genere: e.target.value})}>
+                    <option>Narrativa</option><option>Saggistica</option><option>Classici</option><option>Scientifico</option><option>Lingue</option><option>Graphic Novel</option>
                   </select>
                 </div>
               </div>
 
-              <button type="submit" className="w-full bg-slate-900 text-white py-3 rounded-xl font-black uppercase text-[10px] tracking-widest hover:bg-slate-800 transition-all shadow-lg mt-2">
-                Conferma Operazione
-              </button>
+              <div className="flex gap-4 pt-4">
+                <button type="button" onClick={() => { setShowAddModal(false); setShowExchangeModal(null); }} className="flex-1 py-4 bg-slate-100 text-slate-500 font-bold rounded-2xl hover:bg-slate-200 transition-all">Annulla</button>
+                <button type="submit" className="flex-[2] py-4 bg-indigo-600 text-white font-bold rounded-2xl hover:bg-indigo-700 shadow-lg shadow-indigo-100 transition-all flex items-center justify-center gap-2">
+                  Conferma e Registra <MoveRight size={20}/>
+                </button>
+              </div>
             </form>
           </div>
         </div>
@@ -406,25 +427,32 @@ export default function App() {
   );
 }
 
-function SidebarLink({ icon, label, active, onClick }) {
+function NavBtn({ active, icon, label, onClick }) {
   return (
-    <button onClick={onClick} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all group ${active ? 'bg-slate-900 text-white shadow-md' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-900'}`}>
-      <span className={active ? 'text-white' : 'group-hover:text-slate-900'}>{icon}</span>
-      <span className="hidden md:block font-black text-[10px] uppercase tracking-tight">{label}</span>
+    <button 
+      onClick={onClick} 
+      className={`w-full flex items-center gap-4 px-4 py-4 rounded-2xl transition-all group ${
+        active 
+        ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-100' 
+        : 'text-slate-400 hover:bg-indigo-50 hover:text-indigo-600'
+      }`}
+    >
+      <span className={active ? 'text-white' : 'group-hover:scale-110 transition-transform'}>
+        {React.cloneElement(icon, { size: 24 })}
+      </span>
+      <span className="hidden lg:block font-bold text-sm tracking-tight">{label}</span>
     </button>
   );
 }
 
-function StatBox({ label, value, color }) {
-  const c = {
-    blue: 'text-blue-600 bg-blue-50 border-blue-100',
-    slate: 'text-slate-600 bg-slate-50 border-slate-100',
-    green: 'text-green-600 bg-green-50 border-green-100'
-  }[color];
+function StatCard({ label, value, icon }) {
   return (
-    <div className={`p-4 border rounded-2xl ${c} shadow-sm`}>
-      <p className="text-[8px] font-black uppercase opacity-60 mb-1">{label}</p>
-      <p className="text-2xl font-black tracking-tighter leading-none italic">{value}</p>
+    <div className="bg-white p-6 border border-slate-200 rounded-3xl shadow-sm flex items-center gap-5">
+      <div className="w-14 h-14 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-600">{icon}</div>
+      <div>
+        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{label}</p>
+        <p className="text-3xl font-black text-slate-900 tracking-tighter">{value}</p>
+      </div>
     </div>
   );
 }
