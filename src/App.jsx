@@ -1,17 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getFirestore, collection, doc, addDoc, onSnapshot, 
-  setDoc, deleteDoc, query, limit, getDoc, serverTimestamp 
+  setDoc, deleteDoc, query, getDoc, serverTimestamp 
 } from 'firebase/firestore';
 import { 
   getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut
 } from 'firebase/auth';
 import { 
   Plus, Book, LogOut, Search, 
-  Users, LayoutDashboard, BookOpen, 
-  ArrowDownCircle, History, RefreshCw,
-  Info, AlertCircle, CheckCircle2, ChevronRight
+  Users, LayoutDashboard, History, 
+  ArrowRightLeft, Download, Trash2, 
+  BarChart3, UserCog, ShieldCheck, 
+  Calendar, BookCopy, Filter
 } from 'lucide-react';
 
 // --- CONFIGURAZIONE ---
@@ -28,8 +29,8 @@ const firebaseConfig = {
   appId: "1:748836692117:web:ffb5a7f5df36ffdb5afb9c"
 };
 
-const APP_ID = 'ponzini-lilla-v5';
-const ADMIN_EMAILS = ["rochiragiovanni87@gmail.com", "admin@iisslilla.it"]; // Aggiungi la tua mail qui
+const APP_ID = 'ponzini-lilla-v6';
+const ADMIN_EMAILS = ["rochiragiovanni87@gmail.com"]; 
 const SCHOOL_LOGO = "https://iisslilla.edu.it/wp-content/uploads/sites/996/lilla.png?x79845";
 
 const app = initializeApp(firebaseConfig);
@@ -40,25 +41,26 @@ const googleProvider = new GoogleAuthProvider();
 export default function App() {
   const [user, setUser] = useState(null);
   const [userData, setUserData] = useState(null);
-  const [view, setView] = useState('catalog');
+  const [view, setView] = useState('catalog'); // catalog, logs, admin, users
   const [books, setBooks] = useState([]);
   const [logs, setLogs] = useState([]);
+  const [allUsers, setAllUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isRegistering, setIsRegistering] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [modalType, setModalType] = useState(null); // 'dona', 'scambia'
+  const [modalType, setModalType] = useState(null); 
   const [selectedBook, setSelectedBook] = useState(null);
   const [form, setForm] = useState({ titolo: '', autore: '', classe: '' });
 
-  // 1. Auth & Profile Management
+  const isAdmin = useMemo(() => user && ADMIN_EMAILS.includes(user.email), [user]);
+
+  // 1. Auth & Profile
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
       if (u) {
         setUser(u);
-        const isAdmin = ADMIN_EMAILS.includes(u.email);
-        
-        if (isAdmin) {
-          setUserData({ nome: "Amministrazione", classe: "Gestore" });
+        if (ADMIN_EMAILS.includes(u.email)) {
+          setUserData({ nome: "Admin Sistema", classe: "STAFF", isAdmin: true });
           setIsRegistering(false);
         } else {
           const userRef = doc(db, 'artifacts', APP_ID, 'users', u.uid, 'profile', 'data');
@@ -79,131 +81,140 @@ export default function App() {
     return unsub;
   }, []);
 
-  // 2. Real-time Data Listeners
+  // 2. Data Listeners
   useEffect(() => {
     if (!user || isRegistering) return;
 
     const bRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'books');
     const unsubBooks = onSnapshot(bRef, (snap) => {
       setBooks(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, (err) => console.error("Books listen error:", err));
+    });
 
     const lRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'logs');
     const unsubLogs = onSnapshot(lRef, (snap) => {
-      const allLogs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setLogs(allLogs.sort((a, b) => b.timestamp?.seconds - a.timestamp?.seconds));
-    }, (err) => console.error("Logs listen error:", err));
+      setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => b.timestamp?.seconds - a.timestamp?.seconds));
+    });
+
+    if (isAdmin) {
+      const uRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'registered_users');
+      const unsubUsers = onSnapshot(uRef, (snap) => {
+        setAllUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      });
+      return () => { unsubBooks(); unsubLogs(); unsubUsers(); };
+    }
 
     return () => { unsubBooks(); unsubLogs(); };
-  }, [user, isRegistering]);
+  }, [user, isRegistering, isAdmin]);
 
-  // Actions
+  // Logica Transazioni
   const createLog = async (tipo, dettaglio, libro) => {
     await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'logs'), {
-      tipo,
-      dettaglio,
-      libro,
+      tipo, dettaglio, libro,
       utente: userData?.nome || user.displayName,
       classe: userData?.classe || "N/A",
       timestamp: serverTimestamp()
     });
   };
 
-  const handleAction = async (e) => {
+  const handleTransaction = async (e) => {
     e.preventDefault();
-    if (!form.titolo) return;
+    try {
+      const newBook = {
+        titolo: form.titolo,
+        autore: form.autore,
+        donatore: userData.nome,
+        classe: userData.classe,
+        timestamp: serverTimestamp()
+      };
 
-    const newBook = {
-      titolo: form.titolo,
-      autore: form.autore,
-      donatore: userData.nome,
-      classe: userData.classe,
-      timestamp: serverTimestamp()
-    };
-
-    if (modalType === 'dona') {
-      await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'books'), newBook);
-      await createLog('DONAZIONE', 'Ha regalato un nuovo volume', form.titolo);
-    } else if (modalType === 'scambia' && selectedBook) {
-      // Elimina il vecchio, aggiungi il nuovo
-      await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'books', selectedBook.id));
-      await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'books'), newBook);
-      await createLog('SCAMBIO', `Ha scambiato "${selectedBook.titolo}" con un nuovo libro`, form.titolo);
+      if (modalType === 'dona') {
+        await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'books'), newBook);
+        await createLog('DONAZIONE', 'ha inserito', form.titolo);
+      } else if (modalType === 'scambia' && selectedBook) {
+        await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'books', selectedBook.id));
+        await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'books'), newBook);
+        await createLog('SCAMBIO', `ha scambiato "${selectedBook.titolo}" con`, form.titolo);
+      }
+      
+      setModalType(null);
+      setForm({ titolo: '', autore: '', classe: '' });
+      setSelectedBook(null);
+    } catch (err) {
+      console.error(err);
     }
-
-    setModalType(null);
-    setSelectedBook(null);
-    setForm({ titolo: '', autore: '', classe: '' });
   };
 
   const handlePrendi = async (book) => {
-    await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'books', book.id));
-    await createLog('RITIRO', 'Ha prelevato il libro dal catalogo', book.titolo);
-  };
-
-  const loginWithGoogle = async () => {
     try {
-      await signInWithPopup(auth, googleProvider);
+      await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'books', book.id));
+      await createLog('PRESA', 'ha prelevato', book.titolo);
     } catch (err) {
-      console.error("Login Error:", err);
+      console.error(err);
     }
   };
 
+  const deleteUserAccount = async (uId) => {
+    if(confirm("Sei sicuro di voler eliminare questo utente?")) {
+      await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'registered_users', uId));
+      // Nota: Eliminazione Auth richiede logiche server, qui simuliamo la rimozione dal database pubblico
+    }
+  };
+
+  // Calcolo Statistiche
+  const stats = useMemo(() => {
+    const counts = { prelievi: 0, donazioni: 0, scambi: 0 };
+    logs.forEach(l => {
+      if (l.tipo === 'PRESA') counts.prelievi++;
+      if (l.tipo === 'DONAZIONE') counts.donazioni++;
+      if (l.tipo === 'SCAMBIO') counts.scambi++;
+    });
+    return counts;
+  }, [logs]);
+
   if (loading) return (
-    <div className="h-screen flex flex-col items-center justify-center bg-white">
-      <img src={SCHOOL_LOGO} className="h-24 animate-bounce mb-6" alt="Logo" />
-      <div className="w-48 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-        <div className="h-full bg-indigo-600 animate-progress"></div>
-      </div>
-      <style>{`.animate-progress { animation: progress 2s ease-in-out infinite; width: 30%; } @keyframes progress { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }`}</style>
+    <div className="h-screen flex items-center justify-center bg-slate-50">
+      <img src={SCHOOL_LOGO} className="h-20 animate-pulse" alt="Logo" />
     </div>
   );
 
   if (!user) return (
-    <div className="min-h-screen bg-[#f8fafc] flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-white rounded-[3rem] shadow-2xl border border-slate-100 p-10 text-center relative overflow-hidden">
-        <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-indigo-600 via-purple-500 to-indigo-600"></div>
-        <img src={SCHOOL_LOGO} className="h-32 mx-auto mb-8 object-contain" alt="Logo Lilla" />
-        <h1 className="text-3xl font-black text-slate-900 mb-2">Ponzini Hub</h1>
-        <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px] mb-10">I.I.S. "Vincenzo Lilla"</p>
-        
+    <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6">
+      <div className="max-w-md w-full bg-white rounded-xl shadow-2xl border-t-4 border-blue-600 p-12 text-center">
+        <img src={SCHOOL_LOGO} className="h-28 mx-auto mb-8" alt="Logo" />
+        <h1 className="text-2xl font-bold text-slate-800 mb-2">Ponzini Hub</h1>
+        <p className="text-slate-500 text-sm mb-10">Accedi per gestire i tuoi libri scolastici</p>
         <button 
-          onClick={loginWithGoogle}
-          className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-5 rounded-2xl flex items-center justify-center gap-4 transition-all hover:scale-[1.02] active:scale-95 shadow-xl shadow-indigo-100"
+          onClick={() => signInWithPopup(auth, googleProvider)}
+          className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-lg flex items-center justify-center gap-3 transition-all"
         >
-          <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-6 h-6 bg-white p-1 rounded-full" alt="" />
-          Accedi con Google
+          Entra con Google
         </button>
-        <p className="mt-8 text-xs text-slate-400 font-medium">Usa l'email istituzionale per accedere</p>
       </div>
     </div>
   );
 
   if (isRegistering) return (
-    <div className="min-h-screen bg-indigo-50 flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-white rounded-[2.5rem] shadow-xl p-10">
-        <h2 className="text-2xl font-black text-slate-900 mb-2">Quasi pronto!</h2>
-        <p className="text-slate-500 mb-8 font-medium">Inserisci la tua classe per iniziare lo scambio.</p>
-        <div className="space-y-6">
-          <div>
-            <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Classe e Sezione</label>
-            <input 
-              placeholder="es. 3A LING" 
-              className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-500 rounded-2xl p-4 outline-none transition-all font-bold"
-              onChange={e => setForm({...form, classe: e.target.value})}
-            />
-          </div>
+    <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6">
+      <div className="max-w-md w-full bg-white rounded-xl shadow-xl p-10 border-t-4 border-orange-500">
+        <h2 className="text-xl font-bold text-slate-800 mb-6 uppercase tracking-tight">Configura Profilo</h2>
+        <div className="space-y-4">
+          <input 
+            placeholder="La tua classe (es. 4BS)" 
+            className="w-full bg-slate-50 border border-slate-200 rounded-lg p-4 outline-none focus:border-orange-500 font-bold"
+            onChange={e => setForm({...form, classe: e.target.value.toUpperCase()})}
+          />
           <button 
             onClick={async () => {
               if (!form.classe) return;
-              const p = { nome: user.displayName, email: user.email, classe: form.classe.toUpperCase(), uid: user.uid };
+              const p = { nome: user.displayName, email: user.email, classe: form.classe, uid: user.uid };
               await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'profile', 'data'), p);
+              await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'registered_users', user.uid), p);
               setUserData(p);
               setIsRegistering(false);
             }}
-            className="w-full bg-indigo-600 text-white font-bold py-5 rounded-2xl shadow-lg"
+            className="w-full bg-orange-500 text-white font-bold py-4 rounded-lg shadow-lg"
           >
-            Completa Registrazione
+            Inizia Ora
           </button>
         </div>
       </div>
@@ -211,192 +222,230 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-[#fcfdfe] flex flex-col font-sans">
-      {/* HEADER */}
-      <header className="bg-white border-b border-slate-100 px-6 lg:px-12 py-5 sticky top-0 z-40 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-6">
-          <img src={SCHOOL_LOGO} className="h-14" alt="Logo" />
-          <div className="hidden sm:block">
-            <h1 className="text-xl font-black text-slate-900 tracking-tight">Ponzini Hub</h1>
-            <p className="text-[10px] font-bold text-indigo-600 uppercase tracking-[0.2em]">Biblioteca Aperta</p>
-          </div>
-        </div>
-
-        <div className="flex-1 max-w-md mx-8 hidden lg:block">
-          <div className="relative">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
-            <input 
-              placeholder="Cerca un libro o un autore..."
-              className="w-full bg-slate-50 rounded-2xl py-3 pl-12 pr-4 border-none text-sm focus:ring-2 ring-indigo-100"
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-            />
-          </div>
-        </div>
-
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-800">
+      {/* NAVBAR */}
+      <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-4">
-          <div className="text-right mr-2">
-            <p className="text-sm font-black text-slate-900 leading-none">{userData?.nome}</p>
-            <p className="text-[10px] font-bold text-slate-400 mt-1 uppercase tracking-tighter">{userData?.classe}</p>
+          <img src={SCHOOL_LOGO} className="h-10" alt="Logo" />
+          <div className="h-8 w-[2px] bg-slate-200 mx-2 hidden sm:block"></div>
+          <div>
+            <h1 className="text-lg font-black tracking-tighter text-blue-900 uppercase">Ponzini Hub</h1>
+            <p className="text-[9px] font-bold text-orange-500 uppercase tracking-widest leading-none">I.I.S. Lilla</p>
           </div>
-          <button onClick={() => signOut(auth)} className="p-3 bg-slate-50 text-slate-400 hover:text-red-500 rounded-xl transition-colors">
+        </div>
+
+        <div className="flex items-center gap-6">
+          <div className="hidden md:block text-right">
+            <p className="text-sm font-bold text-slate-900">{userData?.nome}</p>
+            <p className="text-[10px] font-black text-blue-600 uppercase">{userData?.classe}</p>
+          </div>
+          <button onClick={() => signOut(auth)} className="p-2 text-slate-400 hover:text-red-500 transition-colors">
             <LogOut size={20} />
           </button>
         </div>
       </header>
 
       <div className="flex flex-1">
-        {/* SIDEBAR */}
-        <nav className="w-20 lg:w-72 bg-white border-r border-slate-100 p-4 space-y-2">
-          <SidebarBtn active={view === 'catalog'} icon={<LayoutDashboard/>} label="Esplora Catalogo" onClick={() => setView('catalog')} color="indigo" />
-          <SidebarBtn active={view === 'logs'} icon={<History/>} label="Movimenti Recenti" onClick={() => setView('logs')} color="emerald" />
-          <div className="pt-8 px-4 hidden lg:block">
-            <div className="bg-indigo-50 rounded-3xl p-6 relative overflow-hidden">
-              <BookOpen className="text-indigo-200 absolute -right-4 -bottom-4 rotate-12" size={80} />
-              <p className="text-[10px] font-black text-indigo-400 uppercase mb-2">Suggerimento</p>
-              <p className="text-xs font-bold text-indigo-900 leading-relaxed relative z-10">Porta un libro che non leggi più e scambialo con una nuova avventura!</p>
+        {/* SIDEBAR NAVIGATION */}
+        <aside className="w-20 lg:w-64 bg-white border-r border-slate-200 p-4 space-y-2">
+          <NavBtn active={view === 'catalog'} icon={<LayoutDashboard/>} label="Catalogo" onClick={() => setView('catalog')} color="blue" />
+          <NavBtn active={view === 'logs'} icon={<History/>} label="Movimenti" onClick={() => setView('logs')} color="emerald" />
+          
+          {isAdmin && (
+            <div className="pt-6 mt-6 border-t border-slate-100 space-y-2">
+              <p className="px-4 text-[10px] font-black text-slate-400 uppercase mb-2">Admin Area</p>
+              <NavBtn active={view === 'admin'} icon={<BarChart3/>} label="Dashboard" onClick={() => setView('admin')} color="orange" />
+              <NavBtn active={view === 'users'} icon={<UserCog/>} label="Gestione Utenti" onClick={() => setView('users')} color="orange" />
             </div>
-          </div>
-        </nav>
+          )}
+        </aside>
 
-        {/* MAIN CONTENT */}
-        <main className="flex-1 p-6 lg:p-12 overflow-y-auto">
+        {/* MAIN VIEW */}
+        <main className="flex-1 p-6 lg:p-10">
           {view === 'catalog' && (
-            <>
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-12">
+            <section>
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
                 <div>
-                  <h2 className="text-4xl font-black text-slate-900 tracking-tight">Catalogo</h2>
-                  <p className="text-slate-500 font-medium mt-1">Scegli la tua prossima lettura tra i {books.length} volumi disponibili.</p>
+                  <h2 className="text-3xl font-black text-slate-900">Biblioteca Condivisa</h2>
+                  <p className="text-slate-500 font-medium">Trova il materiale per le tue lezioni.</p>
                 </div>
-                <button 
-                  onClick={() => {setModalType('dona'); setForm({titolo:'', autore:'', classe:''});}}
-                  className="bg-indigo-600 text-white px-8 py-5 rounded-[1.5rem] font-bold flex items-center gap-3 hover:bg-indigo-700 shadow-xl shadow-indigo-100 transition-all hover:scale-105 active:scale-95"
-                >
-                  <Plus size={20}/> Dona Libro
-                </button>
+                <div className="flex gap-2 w-full md:w-auto">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                    <input 
+                      placeholder="Cerca..."
+                      className="pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-lg text-sm w-full outline-none focus:border-blue-500"
+                      onChange={e => setSearchTerm(e.target.value)}
+                    />
+                  </div>
+                  <button 
+                    onClick={() => setModalType('dona')}
+                    className="bg-blue-600 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 hover:bg-blue-700 transition-all shadow-lg shadow-blue-100"
+                  >
+                    <Plus size={18}/> Dona
+                  </button>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-8">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
                 {books.filter(b => b.titolo.toLowerCase().includes(searchTerm.toLowerCase())).map(book => (
-                  <div key={book.id} className="group bg-white border border-slate-100 rounded-[2.5rem] p-8 shadow-sm hover:shadow-2xl transition-all duration-300 relative overflow-hidden flex flex-col">
-                    <div className="absolute top-0 left-0 w-1.5 h-full bg-indigo-500 group-hover:w-full group-hover:opacity-[0.03] transition-all"></div>
-                    
-                    <div className="mb-8">
-                      <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-500 mb-6 group-hover:scale-110 transition-transform">
+                  <div key={book.id} className="bg-white border border-slate-200 rounded-xl p-6 hover:shadow-xl transition-shadow group">
+                    <div className="flex justify-between items-start mb-4">
+                      <div className="p-3 bg-blue-50 text-blue-600 rounded-lg">
                         <Book size={24} />
                       </div>
-                      <h3 className="text-xl font-black text-slate-900 leading-tight mb-2 line-clamp-2">{book.titolo}</h3>
-                      <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest">{book.autore || 'Autore Sconosciuto'}</p>
+                      <span className="text-[10px] font-black bg-slate-100 px-2 py-1 rounded text-slate-500 uppercase">{book.classe}</span>
+                    </div>
+                    <h3 className="text-lg font-bold text-slate-900 mb-1 line-clamp-1">{book.titolo}</h3>
+                    <p className="text-slate-400 text-xs font-bold mb-6 uppercase tracking-tight">{book.autore || 'Autore N/D'}</p>
+                    
+                    <div className="flex items-center gap-2 mb-6 text-xs text-slate-500 font-medium border-t border-slate-50 pt-4">
+                      <Users size={14} className="text-slate-300"/> Donato da: <span className="font-bold text-slate-700">{book.donatore}</span>
                     </div>
 
-                    <div className="mt-auto space-y-3 pt-6 border-t border-slate-50">
-                      <div className="flex items-center gap-2 text-[10px] font-black text-slate-400 uppercase">
-                        <Users size={12}/> {book.donatore} ({book.classe})
-                      </div>
-                      <div className="grid grid-cols-2 gap-2 pt-2">
-                        <button 
-                          onClick={() => handlePrendi(book)}
-                          className="py-3 bg-slate-50 hover:bg-emerald-500 hover:text-white rounded-xl text-slate-600 font-black text-[10px] uppercase tracking-wider transition-all"
-                        >
-                          Prendi
-                        </button>
-                        <button 
-                          onClick={() => {setSelectedBook(book); setModalType('scambia');}}
-                          className="py-3 bg-slate-50 hover:bg-amber-500 hover:text-white rounded-xl text-slate-600 font-black text-[10px] uppercase tracking-wider transition-all"
-                        >
-                          Scambia
-                        </button>
-                      </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button 
+                        onClick={() => handlePrendi(book)}
+                        className="py-3 border border-emerald-500 text-emerald-600 hover:bg-emerald-500 hover:text-white rounded-lg font-bold text-xs uppercase transition-all"
+                      >
+                        Prendi
+                      </button>
+                      <button 
+                        onClick={() => {setSelectedBook(book); setModalType('scambia');}}
+                        className="py-3 bg-orange-500 text-white hover:bg-orange-600 rounded-lg font-bold text-xs uppercase transition-all shadow-md shadow-orange-100"
+                      >
+                        Scambia
+                      </button>
                     </div>
                   </div>
                 ))}
               </div>
-            </>
+            </section>
           )}
 
           {view === 'logs' && (
-            <div className="max-w-4xl mx-auto">
-              <h2 className="text-4xl font-black text-slate-900 mb-10 tracking-tight">Registro Movimenti</h2>
-              <div className="space-y-4">
+            <section className="max-w-4xl mx-auto">
+              <div className="flex items-center gap-3 mb-8">
+                <History className="text-emerald-500" size={32} />
+                <h2 className="text-3xl font-black text-slate-900">Registro Attività</h2>
+              </div>
+              <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
                 {logs.map((log, i) => (
-                  <div key={log.id} className="bg-white border border-slate-100 p-6 rounded-3xl shadow-sm flex items-center gap-6 animate-in slide-in-from-bottom-2" style={{animationDelay: `${i*50}ms`}}>
-                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 ${
-                      log.tipo === 'DONAZIONE' ? 'bg-emerald-50 text-emerald-600' : 
-                      log.tipo === 'SCAMBIO' ? 'bg-amber-50 text-amber-600' : 
-                      'bg-indigo-50 text-indigo-600'
+                  <div key={log.id} className={`p-5 flex items-center gap-4 border-b border-slate-100 hover:bg-slate-50 transition-colors ${i === logs.length - 1 ? 'border-b-0' : ''}`}>
+                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${
+                      log.tipo === 'PRESA' ? 'bg-blue-50 text-blue-600' :
+                      log.tipo === 'DONAZIONE' ? 'bg-emerald-50 text-emerald-600' : 'bg-orange-50 text-orange-600'
                     }`}>
-                      {log.tipo === 'DONAZIONE' ? <CheckCircle2 size={24}/> : 
-                       log.tipo === 'SCAMBIO' ? <RefreshCw size={24}/> : 
-                       <ArrowDownCircle size={24}/>}
+                      {log.tipo === 'SCAMBIO' ? <ArrowRightLeft size={18}/> : log.tipo === 'PRESA' ? <Download size={18}/> : <Plus size={18}/>}
                     </div>
                     <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-1">
-                        <span className={`text-[9px] font-black px-2 py-0.5 rounded-md ${
-                          log.tipo === 'DONAZIONE' ? 'bg-emerald-100 text-emerald-700' : 
-                          log.tipo === 'SCAMBIO' ? 'bg-amber-100 text-amber-700' : 
-                          'bg-indigo-100 text-indigo-700'
-                        }`}>{log.tipo}</span>
-                        <p className="text-[10px] font-bold text-slate-400">{log.timestamp?.toDate().toLocaleString()}</p>
-                      </div>
-                      <p className="text-sm font-bold text-slate-800">
-                        <span className="text-indigo-600">{log.utente} ({log.classe})</span> {log.dettaglio.toLowerCase()} <span className="italic font-black">"{log.libro}"</span>
+                      <p className="text-sm font-medium text-slate-700 leading-snug">
+                        <span className="font-black text-slate-900">{log.utente}</span> ({log.classe}) {log.dettaglio} <span className="text-blue-600 font-bold italic">"{log.libro}"</span>
                       </p>
+                      <p className="text-[10px] font-bold text-slate-400 mt-1 uppercase">{log.timestamp?.toDate().toLocaleString()}</p>
                     </div>
                   </div>
                 ))}
               </div>
-            </div>
+            </section>
+          )}
+
+          {view === 'admin' && (
+            <section>
+              <h2 className="text-3xl font-black text-slate-900 mb-8 flex items-center gap-3">
+                <ShieldCheck className="text-orange-500"/> Dashboard Amministrativa
+              </h2>
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+                <StatsCard icon={<Download/>} label="Prendi" value={stats.prelievi} color="blue" />
+                <StatsCard icon={<Plus/>} label="Dona" value={stats.donazioni} color="emerald" />
+                <StatsCard icon={<ArrowRightLeft/>} label="Scambi" value={stats.scambi} color="orange" />
+              </div>
+
+              <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-sm">
+                <h3 className="font-black text-slate-800 uppercase text-xs tracking-widest mb-6">Attività Totale (Visualizzazione Grafica)</h3>
+                <div className="flex items-end gap-10 h-64 border-b border-slate-100 pb-2 px-10">
+                  <Bar val={stats.prelievi} max={Math.max(stats.prelievi, stats.donazioni, stats.scambi, 1)} color="bg-blue-500" label="Ritiri" />
+                  <Bar val={stats.donazioni} max={Math.max(stats.prelievi, stats.donazioni, stats.scambi, 1)} color="bg-emerald-500" label="Donazioni" />
+                  <Bar val={stats.scambi} max={Math.max(stats.prelievi, stats.donazioni, stats.scambi, 1)} color="bg-orange-500" label="Scambi" />
+                </div>
+              </div>
+            </section>
+          )}
+
+          {view === 'users' && (
+            <section>
+               <h2 className="text-3xl font-black text-slate-900 mb-8 flex items-center gap-3">
+                <UserCog className="text-orange-500"/> Gestione Database Utenti
+              </h2>
+              <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-50 border-b border-slate-200">
+                    <tr>
+                      <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase">Studente</th>
+                      <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase">Classe</th>
+                      <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase text-right">Azioni</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-sm">
+                    {allUsers.map(u => (
+                      <tr key={u.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="px-6 py-4">
+                          <p className="font-bold text-slate-900">{u.nome}</p>
+                          <p className="text-[10px] text-slate-400">{u.email}</p>
+                        </td>
+                        <td className="px-6 py-4 font-black text-blue-600">{u.classe}</td>
+                        <td className="px-6 py-4 text-right">
+                          <button 
+                            onClick={() => deleteUserAccount(u.id)}
+                            className="p-2 text-slate-300 hover:text-red-500 transition-colors"
+                          >
+                            <Trash2 size={18}/>
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
           )}
         </main>
       </div>
 
-      {/* MODAL SYSTEM */}
+      {/* MODAL TRANSATTIVA */}
       {modalType && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-6">
-          <div className="bg-white w-full max-w-lg rounded-[3rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
-            <div className={`p-10 text-white ${modalType === 'dona' ? 'bg-indigo-600' : 'bg-amber-500'}`}>
-              <div className="flex justify-between items-start">
-                <div>
-                  <h3 className="text-3xl font-black mb-2 flex items-center gap-3">
-                    {modalType === 'dona' ? <Plus size={32}/> : <RefreshCw size={32}/>}
-                    {modalType === 'dona' ? 'Dona Libro' : 'Scambia Libro'}
-                  </h3>
-                  <p className="text-white/80 font-medium">
-                    {modalType === 'dona' ? 'Regala un nuovo volume alla biblioteca.' : `Lascia un libro nuovo per prendere "${selectedBook?.titolo}"`}
-                  </p>
-                </div>
-                <button onClick={() => setModalType(null)} className="text-white/60 hover:text-white transition-colors text-4xl">&times;</button>
-              </div>
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
+          <div className="bg-white w-full max-w-lg rounded-xl shadow-2xl overflow-hidden border border-slate-200">
+            <div className={`px-8 py-6 flex justify-between items-center text-white ${modalType === 'dona' ? 'bg-blue-600' : 'bg-orange-500'}`}>
+              <h3 className="text-xl font-bold uppercase tracking-tight flex items-center gap-2">
+                {modalType === 'dona' ? <Plus/> : <ArrowRightLeft/>}
+                {modalType === 'dona' ? 'Inserisci Libro' : 'Effettua Scambio'}
+              </h3>
+              <button onClick={() => setModalType(null)} className="text-2xl font-light hover:scale-110 transition-transform">&times;</button>
             </div>
-            
-            <form onSubmit={handleAction} className="p-10 space-y-8">
-              <div className="space-y-6">
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Titolo del Libro da lasciare</label>
-                  <input 
-                    required 
-                    placeholder="Titolo completo..." 
-                    className="w-full bg-slate-50 border-none rounded-2xl p-5 text-lg font-bold outline-none ring-2 ring-transparent focus:ring-indigo-100 transition-all"
-                    value={form.titolo} 
-                    onChange={e => setForm({...form, titolo: e.target.value})} 
-                  />
+
+            <form onSubmit={handleTransaction} className="p-8 space-y-5">
+              {modalType === 'scambia' && (
+                <div className="bg-orange-50 p-4 rounded-lg border border-orange-100 mb-6">
+                  <p className="text-[10px] font-black text-orange-600 uppercase mb-1">Libro che stai prendendo:</p>
+                  <p className="text-sm font-bold text-slate-800 italic">"{selectedBook?.titolo}"</p>
                 </div>
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Autore</label>
-                  <input 
-                    required 
-                    placeholder="Nome dell'autore..." 
-                    className="w-full bg-slate-50 border-none rounded-2xl p-5 text-lg font-bold outline-none ring-2 ring-transparent focus:ring-indigo-100 transition-all"
-                    value={form.autore} 
-                    onChange={e => setForm({...form, autore: e.target.value})} 
-                  />
-                </div>
+              )}
+              
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Libro da depositare</label>
+                <input required className="w-full bg-slate-50 border border-slate-200 rounded-lg p-4 mt-1 font-bold outline-none focus:border-blue-500" placeholder="Titolo del volume..." value={form.titolo} onChange={e => setForm({...form, titolo: e.target.value})} />
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Autore</label>
+                <input required className="w-full bg-slate-50 border border-slate-200 rounded-lg p-4 mt-1 font-bold outline-none focus:border-blue-500" placeholder="Nome autore..." value={form.autore} onChange={e => setForm({...form, autore: e.target.value})} />
               </div>
 
-              <div className="flex gap-4 pt-4">
-                <button type="button" onClick={() => setModalType(null)} className="flex-1 py-5 bg-slate-100 font-black rounded-2xl text-slate-500 uppercase text-xs tracking-widest">Annulla</button>
-                <button type="submit" className={`flex-[2] py-5 text-white font-black rounded-2xl uppercase text-xs tracking-widest shadow-xl transition-all ${modalType === 'dona' ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-amber-500 hover:bg-amber-600'}`}>
-                  Conferma Operazione
+              <div className="flex gap-3 pt-6">
+                <button type="button" onClick={() => setModalType(null)} className="flex-1 py-4 bg-slate-100 font-bold rounded-lg text-slate-500 uppercase text-[10px] tracking-widest">Annulla</button>
+                <button type="submit" className={`flex-1 py-4 text-white font-bold rounded-lg uppercase text-[10px] tracking-widest shadow-lg ${modalType === 'dona' ? 'bg-blue-600' : 'bg-orange-500'}`}>
+                  Conferma
                 </button>
               </div>
             </form>
@@ -407,17 +456,50 @@ export default function App() {
   );
 }
 
-function SidebarBtn({ active, icon, label, onClick, color }) {
-  const colors = {
-    indigo: active ? 'bg-indigo-600 text-white shadow-indigo-100' : 'text-slate-400 hover:text-indigo-600 hover:bg-indigo-50',
-    emerald: active ? 'bg-emerald-600 text-white shadow-emerald-100' : 'text-slate-400 hover:text-emerald-600 hover:bg-emerald-50'
+function NavBtn({ active, icon, label, onClick, color }) {
+  const styles = {
+    blue: active ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-blue-600 hover:bg-blue-50',
+    emerald: active ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-emerald-600 hover:bg-emerald-50',
+    orange: active ? 'bg-orange-500 text-white' : 'text-slate-400 hover:text-orange-500 hover:bg-orange-50'
   };
 
   return (
-    <button onClick={onClick} className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl font-bold transition-all ${colors[color]} ${active ? 'shadow-xl translate-x-1' : ''}`}>
-      {React.cloneElement(icon, { size: 22 })}
-      <span className="hidden lg:block text-sm tracking-tight">{label}</span>
-      {active && <ChevronRight className="hidden lg:block ml-auto" size={16} />}
+    <button onClick={onClick} className={`w-full flex items-center gap-4 px-4 py-3 rounded-lg font-bold transition-all ${styles[color]}`}>
+      {React.cloneElement(icon, { size: 18 })}
+      <span className="hidden lg:block text-xs uppercase tracking-tight">{label}</span>
     </button>
+  );
+}
+
+function StatsCard({ icon, label, value, color }) {
+  const colors = {
+    blue: "text-blue-600 bg-blue-50",
+    emerald: "text-emerald-600 bg-emerald-50",
+    orange: "text-orange-600 bg-orange-50"
+  };
+  return (
+    <div className="bg-white p-6 border border-slate-200 rounded-xl shadow-sm">
+      <div className={`w-10 h-10 rounded-lg flex items-center justify-center mb-4 ${colors[color]}`}>
+        {React.cloneElement(icon, { size: 20 })}
+      </div>
+      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{label}</p>
+      <p className="text-3xl font-black text-slate-900 mt-1">{value}</p>
+    </div>
+  );
+}
+
+function Bar({ val, max, color, label }) {
+  const height = (val / max) * 100;
+  return (
+    <div className="flex-1 flex flex-col items-center gap-3">
+      <div className="w-full bg-slate-50 rounded-t-lg relative overflow-hidden flex flex-col justify-end h-full">
+        <div 
+          className={`${color} w-full rounded-t-md transition-all duration-1000 ease-out`} 
+          style={{ height: `${height}%` }}
+        ></div>
+        <span className="absolute top-2 w-full text-center text-[10px] font-black text-slate-800">{val}</span>
+      </div>
+      <span className="text-[9px] font-black text-slate-400 uppercase">{label}</span>
+    </div>
   );
 }
